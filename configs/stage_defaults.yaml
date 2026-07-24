@@ -1,0 +1,21 @@
+labeling:
+  backend: vllm
+  max_rounds: 8
+  max_new_tokens: 512
+  max_model_len: 4096
+  tensor_parallel_size: 1
+  vllm_dtype: bfloat16
+  record_mode: lite
+activation_extraction:
+  batch_size: 1
+  torch_dtype: bfloat16
+  device_map: auto
+  save_dtype: float16
+  target_modules:
+    - gate_proj
+    - up_proj
+    - down_proj
+single_type_discovery:
+  top_k: 5000
+  epsilon: 1.0e-8
+  min_class_count: 2

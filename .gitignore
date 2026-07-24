@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local external code checkout. Fetched on demand by Python helper.
+when2tool_repo/
+../when2tool_repo/
+
+# Data, model weights, checkpoints, and generated artifacts stay outside git.
+cross_task_tool_neurons_data/
+../cross_task_tool_neurons_data/
+Qwen/
+../Qwen/
+meta-llama/
+../meta-llama/
+*.pt
+*.safetensors
+*.bin
+*.ckpt
+*.parquet
+
+# Local logs and transient outputs.
+logs/
+tmp/
+output/
+outputs/
+wandb/

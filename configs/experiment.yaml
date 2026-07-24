@@ -1,0 +1,22 @@
+default_model_alias: qwen3-4b-instruct
+seed: 20260725
+subsets:
+  - single_hop
+  - multi_hop
+splits:
+  - train
+  - test
+smoke_sample_counts:
+  single_hop:
+    train: 100
+    test: 30
+  multi_hop:
+    train: 40
+    test: 30
+candidate_multiplier: 2.0
+prompt_mode: current
+reasoning_mode: no_reasoning
+enable_thinking: false
+top_k: 5000
+scar_epsilon: 1.0e-8
+min_class_count: 2
