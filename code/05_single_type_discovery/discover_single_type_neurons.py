@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--visualizations-dir", default=None)
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--top-k", type=int, default=5000)
+    parser.add_argument("--heatmap-top-n", type=int, default=300)
     parser.add_argument("--epsilon", type=float, default=1.0e-8)
     parser.add_argument("--min-class-count", type=int, default=2)
     parser.add_argument("--clean", action="store_true")
@@ -132,12 +133,52 @@ def plot_heatmap(rows_by_type: dict[str, list[dict[str, Any]]], module_meta: lis
     plt.close(fig)
 
 
-def should_skip(out_root: Path, subset: str, overwrite: bool, clean: bool) -> bool:
+def plot_scar_heatmap(rows: list[dict[str, Any]], out_path: Path, top_n: int) -> None:
+    selected = rows[: max(1, min(top_n, len(rows)))]
+    if not selected:
+        return
+    group_order = sorted({(int(row["layer"]), str(row["module"])) for row in selected})
+    group_to_y = {group: i for i, group in enumerate(group_order)}
+    matrix = torch.full((len(group_order), len(selected)), float("nan"), dtype=torch.float32)
+    for x, row in enumerate(selected):
+        y = group_to_y[(int(row["layer"]), str(row["module"]))]
+        matrix[y, x] = float(row["score"])
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig, ax = plt.subplots(figsize=(max(8, len(selected) * 0.035), max(4, len(group_order) * 0.28)))
+    im = ax.imshow(matrix.numpy(), aspect="auto", cmap=cmap)
+    ax.set_title(f"Top-{len(selected)} TDN-SCAR neurons")
+    ax.set_xlabel("Global TDN rank")
+    ax.set_ylabel("Layer / FFN module")
+    ticks = list(range(0, len(selected), max(1, len(selected) // 10)))
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(group_order)), [f"L{layer}.{module}" for layer, module in group_order])
+    fig.colorbar(im, ax=ax, fraction=0.026, pad=0.02, label="SCAR")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
+    return [viz_dir / f"{subset}_heatmap.png"] + [viz_dir / f"tdn_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+
+
+def clean_visualizations(viz_dir: Path, subset: str) -> None:
+    for path in expected_visualizations(viz_dir, subset):
+        if path.exists():
+            path.unlink()
+
+
+def should_skip(out_root: Path, viz_dir: Path, subset: str, overwrite: bool, clean: bool) -> bool:
     subset_dir = out_root / subset
     if clean:
         clean_directory(subset_dir, data_root())
+        clean_visualizations(viz_dir, subset)
         return False
     expected = [subset_dir / task_type / "TDN_neurons.jsonl" for task_type in TASK_TYPES]
+    expected.extend(expected_visualizations(viz_dir, subset))
     if all(path.exists() for path in expected) and not overwrite:
         print(f"Skip existing single-type neurons: {subset_dir}")
         return True
@@ -162,9 +203,10 @@ def main() -> None:
 
     subsets = ["single_hop", "multi_hop"] if args.subset == "all" else [args.subset]
     model_out_root = neurons_root / args.model_alias / "single_type_by_subset"
+    viz_dir = viz_root / args.model_alias / "single_type_by_subset"
 
     for subset in subsets:
-        if should_skip(model_out_root, subset, args.overwrite, args.clean):
+        if should_skip(model_out_root, viz_dir, subset, args.overwrite, args.clean):
             continue
         act_dir = activation_root / args.model_alias / subset / "train"
         activation_path = act_dir / "activations.pt"
@@ -178,6 +220,7 @@ def main() -> None:
 
         rows_by_type: dict[str, list[dict[str, Any]]] = {}
         summary: dict[str, Any] = {"subset": subset, "task_types": {}}
+        scar_heatmaps: dict[str, str] = {}
 
         for task_type in TASK_TYPES:
             indices = [i for i, row in enumerate(meta_rows) if row["task_type"] == task_type]
@@ -222,12 +265,18 @@ def main() -> None:
             }
             summary["task_types"][task_type] = type_summary
             write_json(out_dir / "summary.json", type_summary)
+            scar_heatmap_path = viz_dir / f"tdn_scar_heatmap_{subset}_{task_type}.png"
+            plot_scar_heatmap(rows, scar_heatmap_path, args.heatmap_top_n)
+            scar_heatmaps[task_type] = str(scar_heatmap_path)
             print(f"{subset}/type {task_type}: wrote {len(rows)} neurons")
 
-        viz_dir = viz_root / args.model_alias / "single_type_by_subset"
         heatmap_path = viz_dir / f"{subset}_heatmap.png"
         plot_heatmap(rows_by_type, module_meta, heatmap_path)
         write_json(model_out_root / subset / "module_meta.json", module_meta)
+        summary["visualizations"] = {
+            "density_heatmap": str(heatmap_path),
+            "tdn_scar_heatmaps": scar_heatmaps,
+        }
         write_json(model_out_root / subset / "summary.json", summary)
         write_json(
             model_out_root / subset / "manifest.json",
@@ -237,7 +286,7 @@ def main() -> None:
                 "subset": subset,
                 "params": vars(args),
                 "summary": summary,
-                "visualization": str(heatmap_path),
+                "visualizations": summary["visualizations"],
             },
         )
         print(f"Wrote heatmap: {heatmap_path}")

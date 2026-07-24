@@ -458,13 +458,19 @@ code/11_multigpu/
 ../cross_task_tool_neurons_data/visualizations/<model_alias>/single_type_by_subset/
 |-- single_hop_heatmap.png
 |-- multi_hop_heatmap.png
+|-- tdn_scar_heatmap_single_hop_A.png
+|-- tdn_scar_heatmap_single_hop_B.png
+|-- tdn_scar_heatmap_single_hop_C.png
+|-- tdn_scar_heatmap_multi_hop_A.png
+|-- tdn_scar_heatmap_multi_hop_B.png
+|-- tdn_scar_heatmap_multi_hop_C.png
 |-- summary.md
 ```
 
 运行指令：
 
 ```text
-python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --top-k 5000 --min-class-count 2
+python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --top-k 5000 --heatmap-top-n 300 --min-class-count 2
 ```
 
 如需清理旧的错误单类型神经元产物后重跑，在同一命令末尾加：
@@ -487,6 +493,12 @@ python code/05_single_type_discovery/discover_single_type_neurons.py --model-ali
 ../cross_task_tool_neurons_data/visualizations/qwen3-4b-instruct/single_type_by_subset/
 |-- single_hop_heatmap.png
 |-- multi_hop_heatmap.png
+|-- tdn_scar_heatmap_single_hop_A.png
+|-- tdn_scar_heatmap_single_hop_B.png
+|-- tdn_scar_heatmap_single_hop_C.png
+|-- tdn_scar_heatmap_multi_hop_A.png
+|-- tdn_scar_heatmap_multi_hop_B.png
+|-- tdn_scar_heatmap_multi_hop_C.png
 ```
 
 做法：
@@ -497,6 +509,8 @@ python code/05_single_type_discovery/discover_single_type_neurons.py --model-ali
 - SCAR 按实验方案实现：`delta=mu1-mu0`，pooled std 里加 `epsilon`，`D=z(delta/(rho+epsilon))`，`R=z(delta)`，`SCAR=D+R`。
 - z-score 在同一 `(layer, module)` 内对全部输出坐标归一化。
 - 每个类型从全模型候选 FFN 输出坐标中全局选 `top_k=5000`，不按层、不按模块分配名额。
+- 同阶段生成两类热力图：原有 `layer x FFN module` 密度图，以及新增的 `TDN-SCAR` 细粒度神经元图；新增图只展示已选 top 神经元，不参与神经元选择。
+- `--heatmap-top-n` 控制 `TDN-SCAR` 图展示前多少个神经元，默认 `300`。
 
 ## 阶段 6：共享神经元发现
 
@@ -535,13 +549,17 @@ code/06_shared_discovery/
 ../cross_task_tool_neurons_data/visualizations/<model_alias>/shared_by_subset/
 |-- shared_neuron_heatmap_single_hop.png
 |-- shared_neuron_heatmap_multi_hop.png
+|-- ctd_scar_min_heatmap_single_hop.png
+|-- ctd_scar_mean_heatmap_single_hop.png
+|-- ctd_scar_min_heatmap_multi_hop.png
+|-- ctd_scar_mean_heatmap_multi_hop.png
 |-- summary.md
 ```
 
 运行指令：
 
 ```text
-python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4b-instruct
+python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4b-instruct --heatmap-top-n 300
 ```
 
 如需清理旧的错误共享神经元产物后重跑，在同一命令末尾加：
@@ -566,6 +584,10 @@ python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4
 ../cross_task_tool_neurons_data/visualizations/qwen3-4b-instruct/shared_by_subset/
 |-- shared_neuron_heatmap_single_hop.png
 |-- shared_neuron_heatmap_multi_hop.png
+|-- ctd_scar_min_heatmap_single_hop.png
+|-- ctd_scar_mean_heatmap_single_hop.png
+|-- ctd_scar_min_heatmap_multi_hop.png
+|-- ctd_scar_mean_heatmap_multi_hop.png
 ```
 
 做法：
@@ -575,6 +597,8 @@ python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4
 - `CTD = TDN_A ∩ TDN_B ∩ TDN_C`。
 - 额外保存 `AB/AC/BC` pairwise overlap。
 - `share_rate = |CTD| / |TDN_c|`，分别对 A/B/C 汇总。
+- 同阶段生成两类热力图：原有 CTD `layer x FFN module` 密度图，以及新增的 `CTD-SCAR` 细粒度共享神经元图。
+- `CTD-SCAR` 图分别按 `score_min=min(score_A, score_B, score_C)` 和 `score_mean=mean(score_A, score_B, score_C)` 排序展示；`--heatmap-top-n` 默认展示前 `300` 个 CTD 神经元。
 
 ## 阶段 7：CTD-Masked LoRA 训练
 
@@ -794,7 +818,6 @@ code/10_reporting/
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/
 ../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/
-../cross_task_tool_neurons_data/visualizations/<model_alias>/
 ```
 
 输出：
@@ -844,12 +867,6 @@ python code/10_reporting/build_final_report.py --model-alias all
 |-- figures/ctd_counts.png
 |-- figures/trained_evaluation.png
 |-- figures/mask_ctd_causal_effect.png
-|-- figures/neuron_heatmap_qwen3-4b-instruct_single_hop.png
-|-- figures/neuron_heatmap_qwen3-4b-instruct_multi_hop.png
-|-- figures/source_heatmaps/qwen3-4b-instruct/single_hop_heatmap.png
-|-- figures/source_heatmaps/qwen3-4b-instruct/multi_hop_heatmap.png
-|-- figures/source_heatmaps/qwen3-4b-instruct/shared_neuron_heatmap_single_hop.png
-|-- figures/source_heatmaps/qwen3-4b-instruct/shared_neuron_heatmap_multi_hop.png
 |-- README_results.md
 |-- manifest.json
 ```
@@ -861,7 +878,7 @@ python code/10_reporting/build_final_report.py --model-alias all
 - `training_comparison.csv` 当前只写本实验新增的 `CTD-Masked-LoRA` 绝对指标；`Default` / `Sparse` / `Reason-then-Act` / `Probe&Prefill` 按 When2Tool 论文表格引用，不在本阶段伪造。
 - 默认按模型标签隔离 final report，避免 6 个模型结果互相覆盖；`all_models` 只用于跨模型汇总。
 - 生成 CTD 数量、训练后评测、Mask-CTD 因果效果三张轻量图。
-- 额外生成每个模型、每个 subset 的神经元密度热力图，合并展示 `TDN-A/B/C` 和 `CTD` 在 `layer x FFN module` 上的分布；同时复制阶段 5/6 原始热力图到 `figures/source_heatmaps/`。
+- 神经元热力图在阶段 5 和阶段 6 与原发现热力图同阶段生成；阶段 10 只汇总已有表格和最终结果图，不重新生成或复制神经元热力图。
 - 已存在对应模型 final report 且 manifest 参数一致时提前跳过。
 
 ## 命名规范

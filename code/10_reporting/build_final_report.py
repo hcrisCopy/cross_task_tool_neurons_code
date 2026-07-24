@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from collections import Counter
 from pathlib import Path
-import shutil
 import sys
 from typing import Any
 
@@ -19,7 +17,7 @@ import matplotlib.pyplot as plt
 
 from cttn.data import SUBSETS, TASK_TYPES
 from cttn.eval_metrics import flatten_summary, write_csv
-from cttn.io import read_json, read_jsonl, write_json
+from cttn.io import read_json, write_json
 from cttn.modeling import VALID_MODEL_ALIASES
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 
@@ -32,7 +30,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoints-dir", default=None)
     parser.add_argument("--outputs-dir", default=None)
     parser.add_argument("--causal-dir", default=None)
-    parser.add_argument("--visualizations-dir", default=None)
     parser.add_argument("--report-dir", default=None)
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -319,102 +316,6 @@ def plot_causal(rows: list[dict[str, Any]], path: Path) -> None:
     plt.close(fig)
 
 
-def density_matrix(rows: list[dict[str, Any]], module_dims: dict[tuple[int, str], int], layers: list[int], modules: list[str]) -> list[list[float]]:
-    counts = Counter((int(row["layer"]), str(row["module"])) for row in rows)
-    matrix = []
-    for layer in layers:
-        layer_vals = []
-        for module in modules:
-            dim = max(module_dims.get((layer, module), 1), 1)
-            layer_vals.append(counts.get((layer, module), 0) / dim)
-        matrix.append(layer_vals)
-    return matrix
-
-
-def plot_neuron_heatmap_for_model_subset(
-    *,
-    model_alias: str,
-    subset: str,
-    neurons_root: Path,
-    out_path: Path,
-) -> bool:
-    single_root = neurons_root / model_alias / "single_type_by_subset" / subset
-    shared_root = neurons_root / model_alias / "shared_by_subset" / subset
-    module_meta_path = single_root / "module_meta.json"
-    if not module_meta_path.exists():
-        return False
-    module_meta = read_json(module_meta_path)
-    if not module_meta:
-        return False
-
-    module_dims = {(int(meta["layer"]), str(meta["module"])): int(meta["dim"]) for meta in module_meta}
-    layers = sorted({layer for layer, _ in module_dims})
-    modules = ["gate_proj", "up_proj", "down_proj"]
-    panels: list[tuple[str, list[dict[str, Any]]]] = []
-    for task_type in TASK_TYPES:
-        path = single_root / task_type / "TDN_neurons.jsonl"
-        if path.exists():
-            panels.append((f"TDN-{task_type}", read_jsonl(path)))
-    ctd_path = shared_root / "CTD_neurons.jsonl"
-    if ctd_path.exists():
-        panels.append(("CTD", read_jsonl(ctd_path)))
-    if not panels:
-        return False
-
-    fig, axes = plt.subplots(1, len(panels), figsize=(max(4 * len(panels), 8), max(5, len(layers) * 0.22)), sharey=True)
-    if len(panels) == 1:
-        axes = [axes]
-    for ax, (title, rows) in zip(axes, panels):
-        matrix = density_matrix(rows, module_dims, layers, modules)
-        im = ax.imshow(matrix, aspect="auto", cmap="viridis")
-        ax.set_title(title)
-        ax.set_xticks(range(len(modules)), modules, rotation=30, ha="right")
-        ax.set_yticks(range(len(layers)), layers)
-        ax.set_xlabel("FFN module")
-        if ax is axes[0]:
-            ax.set_ylabel("Layer")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.suptitle(f"{model_alias} / {subset} neuron density")
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=180)
-    plt.close(fig)
-    return True
-
-
-def collect_existing_neuron_figures(model_aliases: list[str], visualizations_root: Path, figures_dir: Path) -> list[Path]:
-    copied: list[Path] = []
-    for model_alias in model_aliases:
-        for subset in SUBSETS:
-            candidates = [
-                visualizations_root / model_alias / "single_type_by_subset" / f"{subset}_heatmap.png",
-                visualizations_root / model_alias / "shared_by_subset" / f"shared_neuron_heatmap_{subset}.png",
-            ]
-            for src in candidates:
-                if not src.exists():
-                    continue
-                dst = figures_dir / "source_heatmaps" / model_alias / src.name
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-                copied.append(dst)
-    return copied
-
-
-def plot_neuron_heatmaps(model_aliases: list[str], neurons_root: Path, figures_dir: Path) -> list[Path]:
-    figures: list[Path] = []
-    for model_alias in model_aliases:
-        for subset in SUBSETS:
-            out_path = figures_dir / f"neuron_heatmap_{model_alias}_{subset}.png"
-            if plot_neuron_heatmap_for_model_subset(
-                model_alias=model_alias,
-                subset=subset,
-                neurons_root=neurons_root,
-                out_path=out_path,
-            ):
-                figures.append(out_path)
-    return figures
-
-
 def write_results_md(
     path: Path,
     *,
@@ -463,7 +364,6 @@ def main() -> None:
     checkpoints_root = resolve_path(args.checkpoints_dir) if args.checkpoints_dir else path_from_config("checkpoints_dir")
     outputs_root = resolve_path(args.outputs_dir) if args.outputs_dir else path_from_config("outputs_dir")
     causal_root = resolve_path(args.causal_dir) if args.causal_dir else path_from_config("causal_validation_dir")
-    visualizations_root = resolve_path(args.visualizations_dir) if args.visualizations_dir else path_from_config("visualizations_dir")
     roots = {
         "labels": labels_root,
         "neurons": neurons_root,
@@ -500,8 +400,6 @@ def main() -> None:
     plot_ctd_counts(neuron_rows, figures[0])
     plot_eval(evaluation_rows, figures[1])
     plot_causal(causal_cross_rows, figures[2])
-    figures.extend(plot_neuron_heatmaps(model_aliases, neurons_root, figures_dir))
-    figures.extend(collect_existing_neuron_figures(model_aliases, visualizations_root, figures_dir))
     existing_figures = [fig for fig in figures if fig.exists()]
     write_results_md(report_dir / "README_results.md", model_aliases=model_aliases, model_summary=model_summary, figures=existing_figures)
     write_json(
