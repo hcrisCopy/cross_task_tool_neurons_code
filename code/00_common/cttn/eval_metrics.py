@@ -247,3 +247,131 @@ def aggregate_run_summaries(run_summaries: list[dict[str, Any]]) -> dict[str, An
             else:
                 result.setdefault(section, {})[group_name] = stats
     return result
+
+
+COMPARISON_METRICS = (
+    "n",
+    "final_accuracy",
+    "total_tool_calls",
+    "avg_tool_calls",
+    "tool_call_rate",
+    "total_token_cost",
+    "avg_token_cost",
+    "decision_accuracy",
+    "over_call_rate",
+    "under_call_rate",
+    "tool_precision",
+    "tool_recall",
+    "tool_f1",
+    "valid_tool_call_rate",
+    "tool_trajectory_success_rate",
+)
+
+
+def _metric_mean_std(value: Any) -> tuple[float | None, float | None]:
+    if isinstance(value, dict):
+        mean = value.get("mean")
+        std = value.get("std")
+        return (
+            float(mean) if isinstance(mean, (int, float)) else None,
+            float(std) if isinstance(std, (int, float)) else None,
+        )
+    if isinstance(value, (int, float)):
+        return float(value), None
+    return None, None
+
+
+def summary_group_metrics(summary: dict[str, Any]) -> dict[tuple[str, str], dict[str, float]]:
+    source = summary.get("mean_std", summary)
+    groups: dict[tuple[str, str], dict[str, float]] = {}
+
+    def add(group_kind: str, group_name: str, metrics: dict[str, Any]) -> None:
+        flat: dict[str, float] = {}
+        for key, value in metrics.items():
+            mean, std = _metric_mean_std(value)
+            if mean is not None:
+                flat[key] = mean
+            if std is not None:
+                flat[f"{key}_std"] = std
+        groups[(group_kind, str(group_name))] = flat
+
+    add("overall", "overall", source.get("overall", {}))
+    for section in ["by_task_type", "by_env", "by_difficulty", "by_tool_necessary"]:
+        group_kind = section.replace("by_", "")
+        for group_name, metrics in source.get(section, {}).items():
+            add(group_kind, str(group_name), metrics)
+    return groups
+
+
+def build_comparison_with_base(
+    *,
+    base_summary: dict[str, Any],
+    trained_summary: dict[str, Any],
+    model_alias: str,
+    subset: str,
+    method: str = "CTD-Masked-LoRA",
+) -> list[dict[str, Any]]:
+    base_groups = summary_group_metrics(base_summary)
+    trained_groups = summary_group_metrics(trained_summary)
+    rows: list[dict[str, Any]] = []
+    eps = 1.0e-12
+
+    def metric_delta(trained: dict[str, float], base: dict[str, float], name: str) -> float | None:
+        if name not in trained or name not in base:
+            return None
+        return float(trained[name]) - float(base[name])
+
+    for group_kind, group_name in sorted(set(base_groups) & set(trained_groups)):
+        base = base_groups[(group_kind, group_name)]
+        trained = trained_groups[(group_kind, group_name)]
+        row: dict[str, Any] = {
+            "model_alias": model_alias,
+            "subset": subset,
+            "group_kind": group_kind,
+            "group_name": group_name,
+            "method": method,
+        }
+        for metric in COMPARISON_METRICS:
+            if metric in base:
+                row[f"base_{metric}"] = base[metric]
+            if f"{metric}_std" in base:
+                row[f"base_{metric}_std"] = base[f"{metric}_std"]
+            if metric in trained:
+                row[f"ctd_{metric}"] = trained[metric]
+            if f"{metric}_std" in trained:
+                row[f"ctd_{metric}_std"] = trained[f"{metric}_std"]
+
+        delta_acc = metric_delta(trained, base, "final_accuracy")
+        delta_avg_tc = metric_delta(trained, base, "avg_tool_calls")
+        delta_tcr = metric_delta(trained, base, "tool_call_rate")
+        delta_total_tc = metric_delta(trained, base, "total_tool_calls")
+        if delta_acc is not None:
+            row["delta_acc_pp"] = 100.0 * delta_acc
+        if delta_avg_tc is not None:
+            row["delta_avg_tool_calls"] = delta_avg_tc
+            row["acc_cost_per_saved_call"] = (
+                (100.0 * delta_acc) / (-delta_avg_tc)
+                if delta_acc is not None and delta_avg_tc < 0
+                else ""
+            )
+        if delta_tcr is not None:
+            row["delta_tool_call_rate"] = delta_tcr
+        if delta_total_tc is not None and abs(base.get("total_tool_calls", 0.0)) > eps:
+            delta_pct = 100.0 * delta_total_tc / (base["total_tool_calls"] + eps)
+            row["delta_total_tool_calls_percent"] = delta_pct
+            row["tool_call_reduction_percent"] = -delta_pct
+        for metric in [
+            "decision_accuracy",
+            "over_call_rate",
+            "under_call_rate",
+            "tool_precision",
+            "tool_recall",
+            "tool_f1",
+            "valid_tool_call_rate",
+            "tool_trajectory_success_rate",
+        ]:
+            delta = metric_delta(trained, base, metric)
+            if delta is not None:
+                row[f"delta_{metric}_pp"] = 100.0 * delta
+        rows.append(row)
+    return rows

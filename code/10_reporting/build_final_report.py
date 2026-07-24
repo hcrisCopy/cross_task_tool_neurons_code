@@ -23,7 +23,7 @@ from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config,
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stage 10: collect result tables and simple figures.")
+    parser = argparse.ArgumentParser(description="Stage 11: collect result tables and simple figures.")
     parser.add_argument("--model-alias", required=True, help="Model alias, comma list, or all.")
     parser.add_argument("--labels-dir", default=None)
     parser.add_argument("--neurons-dir", default=None)
@@ -105,6 +105,8 @@ def collect_source_manifest_params(
     for model_alias in model_aliases:
         model_sources: dict[str, Any] = {"labels": {}, "shared": {}, "training": {}, "evaluation": {}, "causal": {}}
         for subset in SUBSETS:
+            model_sources.setdefault("base_evaluation", {})
+            model_sources.setdefault("base_comparison", {})
             model_sources["labels"][subset] = {}
             for split in ["train", "test"]:
                 path = labels_root / model_alias / subset / split / "manifest.json"
@@ -114,6 +116,11 @@ def collect_source_manifest_params(
                 ("shared", neurons_root / model_alias / "shared_by_subset" / subset / "manifest.json"),
                 ("training", checkpoints_root / model_alias / "ctd_masked_lora" / subset / "manifest.json"),
                 ("evaluation", outputs_root / model_alias / "trained_evaluation" / subset / "manifest.json"),
+                ("base_evaluation", outputs_root / model_alias / "base_evaluation" / subset / "manifest.json"),
+                (
+                    "base_comparison",
+                    outputs_root / model_alias / "trained_evaluation" / subset / "comparison_with_base_manifest.json",
+                ),
                 ("causal", causal_root / model_alias / subset / "manifest.json"),
             ]:
                 if root_path.exists():
@@ -221,6 +228,24 @@ def collect_evaluation_rows(model_aliases: list[str], outputs_root: Path) -> lis
     return rows
 
 
+def collect_base_rows(model_aliases: list[str], outputs_root: Path) -> list[dict[str, Any]]:
+    rows = []
+    for model_alias in model_aliases:
+        for subset in SUBSETS:
+            rows.extend(read_csv_rows(outputs_root / model_alias / "base_evaluation" / subset / "summary_table.csv"))
+    return rows
+
+
+def collect_training_comparison_rows(model_aliases: list[str], outputs_root: Path) -> list[dict[str, Any]]:
+    rows = []
+    for model_alias in model_aliases:
+        for subset in SUBSETS:
+            rows.extend(
+                read_csv_rows(outputs_root / model_alias / "trained_evaluation" / subset / "comparison_with_base.csv")
+            )
+    return rows
+
+
 def collect_causal_rows(model_aliases: list[str], causal_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     summary_rows = []
     cross_rows = []
@@ -237,6 +262,8 @@ def build_model_summary(
     neuron_rows: list[dict[str, Any]],
     training_rows: list[dict[str, Any]],
     evaluation_rows: list[dict[str, Any]],
+    base_rows: list[dict[str, Any]],
+    comparison_rows: list[dict[str, Any]],
     causal_cross_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     out = []
@@ -248,6 +275,26 @@ def build_model_summary(
                 (
                     row
                     for row in evaluation_rows
+                    if row.get("model_alias") == model_alias
+                    and row.get("subset") == subset
+                    and row.get("group_kind") == "overall"
+                ),
+                {},
+            )
+            base_overall = next(
+                (
+                    row
+                    for row in base_rows
+                    if row.get("model_alias") == model_alias
+                    and row.get("subset") == subset
+                    and row.get("group_kind") == "overall"
+                ),
+                {},
+            )
+            comparison_overall = next(
+                (
+                    row
+                    for row in comparison_rows
                     if row.get("model_alias") == model_alias
                     and row.get("subset") == subset
                     and row.get("group_kind") == "overall"
@@ -272,9 +319,29 @@ def build_model_summary(
                     "ctd_count": ctd_count,
                     "training_examples": train.get("training_examples", ""),
                     "trainable_lora_parameters": train.get("trainable_lora_parameters", ""),
-                    "ctd_masked_lora_acc": eval_overall.get("final_accuracy", eval_overall.get("final_accuracy_mean", "")),
-                    "ctd_masked_lora_avg_tc": eval_overall.get("avg_tool_calls", eval_overall.get("avg_tool_calls_mean", "")),
-                    "ctd_masked_lora_tool_acc": eval_overall.get("decision_accuracy", eval_overall.get("decision_accuracy_mean", "")),
+                    "base_acc": comparison_overall.get(
+                        "base_final_accuracy",
+                        base_overall.get("final_accuracy", base_overall.get("final_accuracy_mean", "")),
+                    ),
+                    "base_avg_tc": comparison_overall.get(
+                        "base_avg_tool_calls",
+                        base_overall.get("avg_tool_calls", base_overall.get("avg_tool_calls_mean", "")),
+                    ),
+                    "ctd_masked_lora_acc": comparison_overall.get(
+                        "ctd_final_accuracy",
+                        eval_overall.get("final_accuracy", eval_overall.get("final_accuracy_mean", "")),
+                    ),
+                    "ctd_masked_lora_avg_tc": comparison_overall.get(
+                        "ctd_avg_tool_calls",
+                        eval_overall.get("avg_tool_calls", eval_overall.get("avg_tool_calls_mean", "")),
+                    ),
+                    "ctd_masked_lora_tool_acc": comparison_overall.get(
+                        "ctd_decision_accuracy",
+                        eval_overall.get("decision_accuracy", eval_overall.get("decision_accuracy_mean", "")),
+                    ),
+                    "delta_acc_pp": comparison_overall.get("delta_acc_pp", ""),
+                    "delta_avg_tool_calls": comparison_overall.get("delta_avg_tool_calls", ""),
+                    "tool_call_reduction_percent": comparison_overall.get("tool_call_reduction_percent", ""),
                     "mask_ctd_avg_delta_acc": causal_ctd.get("avg_delta_acc", ""),
                     "mask_ctd_avg_delta_tcr": causal_ctd.get("avg_delta_tcr", ""),
                 }
@@ -311,17 +378,37 @@ def plot_eval(rows: list[dict[str, Any]], path: Path) -> None:
     if not overall:
         return
     labels = [f"{row['model_alias']}\n{row['subset']}" for row in overall]
-    acc = [parse_float(row.get("final_accuracy", row.get("final_accuracy_mean"))) for row in overall]
-    avg_tc = [parse_float(row.get("avg_tool_calls", row.get("avg_tool_calls_mean"))) for row in overall]
+    has_comparison = any("base_final_accuracy" in row or "ctd_final_accuracy" in row for row in overall)
+    acc = [
+        parse_float(row.get("ctd_final_accuracy", row.get("final_accuracy", row.get("final_accuracy_mean"))))
+        for row in overall
+    ]
+    avg_tc = [
+        parse_float(row.get("ctd_avg_tool_calls", row.get("avg_tool_calls", row.get("avg_tool_calls_mean"))))
+        for row in overall
+    ]
     fig, axes = plt.subplots(1, 2, figsize=(max(8, len(labels) * 1.6), 4))
-    axes[0].bar(labels, acc, color="#16a34a")
+    if has_comparison:
+        x = list(range(len(labels)))
+        base_acc = [parse_float(row.get("base_final_accuracy")) for row in overall]
+        base_tc = [parse_float(row.get("base_avg_tool_calls")) for row in overall]
+        width = 0.38
+        axes[0].bar([i - width / 2 for i in x], base_acc, width=width, color="#64748b", label="Base")
+        axes[0].bar([i + width / 2 for i in x], acc, width=width, color="#16a34a", label="CTD")
+        axes[1].bar([i - width / 2 for i in x], base_tc, width=width, color="#64748b", label="Base")
+        axes[1].bar([i + width / 2 for i in x], avg_tc, width=width, color="#f97316", label="CTD")
+        for ax in axes:
+            ax.set_xticks(x, labels)
+            ax.legend()
+    else:
+        axes[0].bar(labels, acc, color="#16a34a")
+        axes[1].bar(labels, avg_tc, color="#f97316")
     axes[0].set_ylabel("Final accuracy")
     axes[0].set_ylim(0, 1)
-    axes[1].bar(labels, avg_tc, color="#f97316")
     axes[1].set_ylabel("Avg tool calls")
     for ax in axes:
         ax.tick_params(axis="x", labelrotation=20)
-    fig.suptitle("CTD-Masked-LoRA Test Evaluation")
+    fig.suptitle("Base vs CTD-Masked-LoRA Test Evaluation" if has_comparison else "CTD-Masked-LoRA Test Evaluation")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=180)
@@ -364,19 +451,21 @@ def write_results_md(
         "",
         "## Model Summary",
         "",
-        "| Model | Subset | CTD | Train Examples | Acc | AvgTC | ToolAcc | Mask-CTD DeltaAcc |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Model | Subset | CTD | Train Examples | Base Acc | CTD Acc | Delta Acc pp | CTD AvgTC | TC Reduction % | Mask-CTD DeltaAcc |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in model_summary:
         lines.append(
-            "| {model_alias} | {subset} | {ctd_count} | {training_examples} | {acc} | {avg_tc} | {tool_acc} | {delta} |".format(
+            "| {model_alias} | {subset} | {ctd_count} | {training_examples} | {base_acc} | {acc} | {delta_acc} | {avg_tc} | {tc_reduction} | {delta} |".format(
                 model_alias=row["model_alias"],
                 subset=row["subset"],
                 ctd_count=row["ctd_count"],
                 training_examples=row["training_examples"],
+                base_acc=row.get("base_acc", ""),
                 acc=row["ctd_masked_lora_acc"],
+                delta_acc=row.get("delta_acc_pp", ""),
                 avg_tc=row["ctd_masked_lora_avg_tc"],
-                tool_acc=row["ctd_masked_lora_tool_acc"],
+                tc_reduction=row.get("tool_call_reduction_percent", ""),
                 delta=row["mask_ctd_avg_delta_acc"],
             )
         )
@@ -404,7 +493,7 @@ def main() -> None:
     model_aliases = selected_models(args.model_alias, roots)
     report_dir = resolve_path(args.report_dir) if args.report_dir else default_report_dir(outputs_root, args.model_alias, model_aliases)
     params = {
-        "stage": "10_reporting",
+        "stage": "11_reporting",
         "model_aliases": model_aliases,
         "report_scope": report_dir.name,
         "source_manifest_params": collect_source_manifest_params(
@@ -424,12 +513,24 @@ def main() -> None:
     neuron_rows = collect_neuron_rows(model_aliases, neurons_root)
     training_rows = collect_training_rows(model_aliases, checkpoints_root)
     evaluation_rows = collect_evaluation_rows(model_aliases, outputs_root)
+    base_rows = collect_base_rows(model_aliases, outputs_root)
+    comparison_rows = collect_training_comparison_rows(model_aliases, outputs_root)
     causal_rows, causal_cross_rows = collect_causal_rows(model_aliases, causal_root)
-    model_summary = build_model_summary(model_aliases, neuron_rows, training_rows, evaluation_rows, causal_cross_rows)
+    model_summary = build_model_summary(
+        model_aliases,
+        neuron_rows,
+        training_rows,
+        evaluation_rows,
+        base_rows,
+        comparison_rows,
+        causal_cross_rows,
+    )
 
     write_csv(report_dir / "neuron_discovery_summary.csv", neuron_rows)
     write_csv(report_dir / "training_run_summary.csv", training_rows)
-    write_csv(report_dir / "training_comparison.csv", evaluation_rows)
+    write_csv(report_dir / "base_evaluation_summary.csv", base_rows)
+    write_csv(report_dir / "trained_evaluation_summary.csv", evaluation_rows)
+    write_csv(report_dir / "training_comparison.csv", comparison_rows if comparison_rows else evaluation_rows)
     write_csv(report_dir / "causal_validation_summary.csv", causal_rows)
     write_csv(report_dir / "causal_cross_type_summary.csv", causal_cross_rows)
     write_csv(report_dir / "model_summary.csv", model_summary)
@@ -440,7 +541,7 @@ def main() -> None:
         figures_dir / "mask_ctd_causal_effect.png",
     ]
     plot_ctd_counts(neuron_rows, figures[0])
-    plot_eval(evaluation_rows, figures[1])
+    plot_eval(comparison_rows if comparison_rows else evaluation_rows, figures[1])
     plot_causal(causal_cross_rows, figures[2])
     existing_figures = [fig for fig in figures if fig.exists()]
     write_results_md(report_dir / "README_results.md", model_aliases=model_aliases, model_summary=model_summary, figures=existing_figures)
@@ -451,7 +552,9 @@ def main() -> None:
             "row_counts": {
                 "neuron_discovery_summary": len(neuron_rows),
                 "training_run_summary": len(training_rows),
-                "training_comparison": len(evaluation_rows),
+                "base_evaluation_summary": len(base_rows),
+                "trained_evaluation_summary": len(evaluation_rows),
+                "training_comparison": len(comparison_rows if comparison_rows else evaluation_rows),
                 "causal_validation_summary": len(causal_rows),
                 "causal_cross_type_summary": len(causal_cross_rows),
                 "model_summary": len(model_summary),

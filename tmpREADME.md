@@ -15,8 +15,9 @@
 - [x] 阶段 6：跨任务类型共享神经元发现
 - [x] 阶段 7：CTD-Masked LoRA 训练
 - [x] 阶段 8：训练后评测
-- [x] 阶段 9：因果验证
-- [x] 阶段 10：结果汇总和可视化
+- [x] 阶段 9：Base 模型评测与 delta 计算
+- [x] 阶段 10：因果验证
+- [x] 阶段 11：结果汇总和可视化
 - [ ] 引用 When2Tool baseline 论文表格并整理最终对比表
 
 ## 章节目录
@@ -32,8 +33,9 @@
 - [阶段 6：共享神经元发现](#阶段-6共享神经元发现)
 - [阶段 7：CTD-Masked LoRA 训练](#阶段-7ctd-masked-lora-训练)
 - [阶段 8：训练后评测](#阶段-8训练后评测)
-- [阶段 9：因果验证](#阶段-9因果验证)
-- [阶段 10：结果汇总和可视化](#阶段-10结果汇总和可视化)
+- [阶段 9：Base 模型评测与 delta 计算](#阶段-9base-模型评测与-delta-计算)
+- [阶段 10：因果验证](#阶段-10因果验证)
+- [阶段 11：结果汇总和可视化](#阶段-11结果汇总和可视化)
 - [命名规范](#命名规范)
 - [代码和数据管理约定](#代码和数据管理约定)
 - [参考链接](#参考链接)
@@ -70,9 +72,9 @@ GitHub 只同步 `cross_task_tool_neurons_code/`。大文件、数据集、模�
 |       |-- 05_single_type_discovery/# 阶段 5：A/B/C 单类型神经元探测
 |       |-- 06_shared_discovery/     # 阶段 6：A/B/C 交集共享神经元发现
 |       |-- 07_training/             # 阶段 7：CTD-Masked LoRA 训练
-|       |-- 08_evaluation/           # 阶段 8：训练后评测
-|       |-- 09_causal_validation/    # 阶段 9：因果验证
-|       |-- 10_reporting/            # 阶段 10：汇总表和可视化
+|       |-- 08_evaluation/           # 阶段 8/9：训练后评测、Base 评测与 delta
+|       |-- 09_causal_validation/    # 阶段 10：因果验证
+|       |-- 10_reporting/            # 阶段 11：汇总表和可视化
 |       |-- 11_multigpu/             # 单机多卡调度入口
 |
 |-- cross_task_tool_neurons_data/       # 不提交 GitHub
@@ -81,8 +83,8 @@ GitHub 只同步 `cross_task_tool_neurons_code/`。大文件、数据集、模�
 |   |-- activations/                 # 阶段 4 输出：激活
 |   |-- neurons/                     # 阶段 5/6 输出：单类型和共享神经元
 |   |-- checkpoints/                 # 阶段 7 输出：LoRA checkpoint
-|   |-- outputs/                     # 阶段 8/10 输出：评测和汇总结果
-|   |-- causal_validation/           # 阶段 9 输出：因果验证结果
+|   |-- outputs/                     # 阶段 8/9/11 输出：评测、Base delta 和汇总结果
+|   |-- causal_validation/           # 阶段 10 输出：因果验证结果
 |   |-- visualizations/              # 热力图和结果图
 |
 |-- Qwen/                              # 不提交 GitHub
@@ -187,12 +189,12 @@ final report: ../cross_task_tool_neurons_data/outputs/final_report/qwen3-4b-inst
 
 说明：阶段 2 参数已对齐 When2Tool 官方 `src/extract_features.py` 默认值：`max_new_tokens=2048`、`max_rounds=12`、`max_model_len=32768`。`tensor_parallel_size` 是硬件并行参数，不作为实验方法变量；当前 qwen3-4b-instruct 单卡跑通命令使用 `1`。阶段 4 的模型前向 dtype 用 `bfloat16`，激活保存 dtype 用 `float32`；原因是官方特征抽取保存 hidden states 时使用 `.float()`，而本实验后续 SCAR 需要均值/方差统计，默认保存 32 位更稳。
 
-2026-07-25 修复说明：阶段 4 已改为复用 When2Tool 官方 `init_state(...)` 构造 `messages/tools`，因此此前基于手工 `system + user` prompt 抽取的正式激活及其下游阶段 5-9 产物只作为历史 smoke 记录保留；严格实验请从阶段 4 开始重跑到阶段 10。阶段 4/5/6 的 manifest 已加入参数敏感跳过，重跑时若检测到旧 manifest 参数不一致会自动覆盖生成。
+2026-07-25 修复说明：阶段 4 已改为复用 When2Tool 官方 `init_state(...)` 构造 `messages/tools`，因此此前基于手工 `system + user` prompt 抽取的正式激活及其下游阶段 5-9 产物只作为历史 smoke 记录保留；严格实验请从阶段 4 开始重跑到阶段 11。阶段 4/5/6 的 manifest 已加入参数敏感跳过，重跑时若检测到旧 manifest 参数不一致会自动覆盖生成。
 
 When2Tool 官方仓库不复制进本仓库；运行时放在同级 `../when2tool_repo`，用于导入官方 env、tool schema、prompt、state machine 和 vLLM/HF wrapper。若不存在，先运行：
 
 ```text
-python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo --network-turbo /etc/network_turbo --pull
+python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo --pull
 ```
 
 ## 阶段 1：原始数据准备
@@ -708,7 +710,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 如需清理旧的错误评测产物后重跑，在同一命令末尾加：
@@ -740,9 +742,63 @@ python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instr
 - 实现差异：阶段 8 为了加载 CTD-Masked LoRA adapter，生成后端使用 HFGenerationAgent；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
 - smoke 命令用 `--n-runs 1`；正式和 When2Tool 论文主表对齐时改为 `--n-runs 3`。
 - `summary_table.csv` 在 `n_runs=1` 时写单次指标；`n_runs>1` 时写完整 mean/std 扁平表，例如 `final_accuracy_mean`、`final_accuracy_std`。
+- 本阶段只写 `CTD-Masked-LoRA` 绝对指标；相对 Base 的 delta 在阶段 9 统一计算。
 - 已存在 summary 和 manifest 参数一致时提前跳过。
 
-## 阶段 9：因果验证
+## 阶段 9：Base 模型评测与 delta 计算
+
+代码位置：
+
+```text
+code/08_evaluation/evaluate_base_model.py
+```
+
+输入：
+
+```text
+../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/outputs/<model_alias>/base_evaluation/
+|-- manifest.json
+|-- single_hop/
+|   |-- outputs.json
+|   |-- per_task.jsonl
+|   |-- summary.json
+|   |-- summary_table.csv
+|   |-- manifest.json
+|-- multi_hop/
+
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/comparison_with_base.csv
+```
+
+单卡简单验证指令：
+
+```text
+python code/08_evaluation/evaluate_base_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
+```
+
+如需清理旧的错误 Base 评测产物和 comparison 后重跑，在同一命令末尾加：
+
+```text
+--clean
+```
+
+做法：
+
+- 只使用 `test` split；single-hop 和 multi-hop 分开评测。
+- 不加载 CTD-Masked LoRA adapter，不做 activation mask，不做 Probe&Prefill。
+- prompt 固定为 When2Tool Default：`current/no_reasoning/enable_thinking=false`。
+- 为了和训练后评测严格可比，生成后端同样使用 `HFGenerationAgent`；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
+- 读取阶段 8 的 `summary.json`，和本阶段 Base `summary.json` 按同一 `overall/env/difficulty/A/B/C/tool_necessary` 分组生成 `comparison_with_base.csv`。
+- `comparison_with_base.csv` 包含 Base 绝对指标、CTD-Masked-LoRA 绝对指标、`delta_acc_pp`、`delta_avg_tool_calls`、`delta_total_tool_calls_percent`、`tool_call_reduction_percent`、`acc_cost_per_saved_call` 和工具决策 delta。
+- 已存在 Base summary 和 comparison manifest 参数一致时提前跳过。
+
+## 阶段 10：因果验证
 
 代码位置：
 
@@ -776,7 +832,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 如需清理旧的错误因果验证产物后重跑，在同一命令末尾加：
@@ -810,10 +866,10 @@ python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b
 - `Mask-Random` 与 `CTD` 保持同层、同模块、同数量分布，并记录 `random_mask_neurons.jsonl`。
 - `Private_c = TDN_c \ CTD`。
 - 输出每个干预的 When2Tool 主指标和工具决策指标，并额外汇总跨 A/B/C 的 `avg_delta_acc`、`var_acc`、`avg_delta_tcr`。
-- 实现差异：阶段 9 为了注册 activation hook 做神经元 mask，生成后端使用 HFGenerationAgent；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
+- 实现差异：阶段 10 为了注册 activation hook 做神经元 mask，生成后端使用 HFGenerationAgent；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
 - 已存在 summary 和 manifest 参数一致时提前跳过。
 
-## 阶段 10：结果汇总和可视化
+## 阶段 11：结果汇总和可视化
 
 代码位置：
 
@@ -827,6 +883,7 @@ code/10_reporting/
 ../cross_task_tool_neurons_data/labels/<model_alias>/
 ../cross_task_tool_neurons_data/neurons/<model_alias>/
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/
+../cross_task_tool_neurons_data/outputs/<model_alias>/base_evaluation/
 ../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/
 ```
@@ -836,6 +893,8 @@ code/10_reporting/
 ```text
 ../cross_task_tool_neurons_data/outputs/final_report/<model_alias>/
 |-- model_summary.csv
+|-- base_evaluation_summary.csv
+|-- trained_evaluation_summary.csv
 |-- training_comparison.csv
 |-- causal_validation_summary.csv
 |-- neuron_discovery_summary.csv
@@ -884,12 +943,12 @@ python code/10_reporting/build_final_report.py --model-alias all
 
 做法：
 
-- 只读取阶段 2、5、6、7、8、9 的已生成产物，不重新跑模型。
+- 只读取阶段 2、5、6、7、8、9、10 的已生成产物，不重新跑模型。
 - 表格行都包含 `model_alias` 和 `subset`，支持 6 个模型结果合并。
-- `training_comparison.csv` 当前只写本实验新增的 `CTD-Masked-LoRA` 绝对指标；`Default` / `Sparse` / `Reason-then-Act` / `Probe&Prefill` 按 When2Tool 论文表格引用，不在本阶段伪造。
+- `training_comparison.csv` 读取阶段 9 的 `comparison_with_base.csv`，包含同口径 Base/Default 与 CTD-Masked-LoRA 的绝对指标和 delta；`Sparse` / `Reason-then-Act` / `Probe&Prefill` 按 When2Tool 论文表格引用，不在本阶段伪造。
 - 默认按模型标签隔离 final report，避免 6 个模型结果互相覆盖；`all_models` 只用于跨模型汇总。
 - 生成 CTD 数量、训练后评测、Mask-CTD 因果效果三张轻量图。
-- 神经元热力图在阶段 5 和阶段 6 与原发现热力图同阶段生成；阶段 10 只汇总已有表格和最终结果图，不重新生成或复制神经元热力图。
+- 神经元热力图在阶段 5 和阶段 6 与原发现热力图同阶段生成；阶段 11 只汇总已有表格和最终结果图，不重新生成或复制神经元热力图。
 - 已存在对应模型 final report 且 manifest 参数一致时提前跳过。
 
 ## 命名规范

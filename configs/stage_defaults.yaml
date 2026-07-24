@@ -51,6 +51,17 @@ evaluation:
   prompt_mode: current
   reasoning_mode: no_reasoning
   enable_thinking: false
+base_evaluation:
+  # Same generation/evaluation path as trained evaluation, without adapter or activation mask.
+  n_runs: 3
+  batch_size: 1
+  max_rounds: 10
+  max_new_tokens: 2048
+  max_model_len: 32768
+  torch_dtype: bfloat16
+  prompt_mode: current
+  reasoning_mode: no_reasoning
+  enable_thinking: false
 causal_validation:
   batch_size: 1
   max_rounds: 10

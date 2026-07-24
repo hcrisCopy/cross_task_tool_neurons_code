@@ -27,7 +27,7 @@ INTERVENTIONS = ("Base", "Mask-Random", "Mask-TDN_c", "Mask-CTD", "Mask-Private_
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stage 9: causal validation with FFN activation masks.")
+    parser = argparse.ArgumentParser(description="Stage 10: causal validation with FFN activation masks.")
     parser.add_argument("--model-alias", required=True)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--dataset-dir", default=None)
