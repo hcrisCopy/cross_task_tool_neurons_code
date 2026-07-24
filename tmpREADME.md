@@ -182,7 +182,7 @@ single-hop CTD: 44 neurons, pairwise AB/AC/BC = 514/199/119
 multi-hop CTD: 46 neurons, pairwise AB/AC/BC = 278/301/148
 single-hop CTD-Masked-LoRA: train examples 92/100, skipped trajectories 8, updates 18, eval Acc=0.9667, AvgTC=1.0000, ToolAcc=0.5333, Mask-CTD avg ΔAcc=0.0000, avg ΔTCR=-0.0333
 multi-hop CTD-Masked-LoRA: train examples 33/40, skipped trajectories 7, updates 7, eval Acc=0.7333, AvgTC=3.1333, ToolAcc=0.4667, Mask-CTD avg ΔAcc=0.0000, avg ΔTCR=-0.0556
-final report: ../cross_task_tool_neurons_data/outputs/final_report/
+final report: ../cross_task_tool_neurons_data/outputs/final_report/qwen3-4b-instruct/
 ```
 
 说明：阶段 2 参数已对齐 When2Tool 官方 `src/extract_features.py` 默认值：`max_new_tokens=2048`、`max_rounds=12`、`max_model_len=32768`。`tensor_parallel_size` 是硬件并行参数，不作为实验方法变量；当前 qwen3-4b-instruct 单卡跑通命令使用 `1`。阶段 4 的模型前向 dtype 用 `bfloat16`，激活保存 dtype 用 `float32`；原因是官方特征抽取保存 hidden states 时使用 `.float()`，而本实验后续 SCAR 需要均值/方差统计，默认保存 32 位更稳。
@@ -794,12 +794,13 @@ code/10_reporting/
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/
 ../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/
+../cross_task_tool_neurons_data/visualizations/<model_alias>/
 ```
 
 输出：
 
 ```text
-../cross_task_tool_neurons_data/outputs/final_report/
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias>/
 |-- model_summary.csv
 |-- training_comparison.csv
 |-- causal_validation_summary.csv
@@ -822,6 +823,8 @@ python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct
 python code/10_reporting/build_final_report.py --model-alias all
 ```
 
+`--model-alias all` 默认输出到 `../cross_task_tool_neurons_data/outputs/final_report/all_models/`；逗号分隔的多个模型默认输出到 `../cross_task_tool_neurons_data/outputs/final_report/<model1>__<model2>/`。如需自定义目录，可显式加 `--report-dir`。
+
 如需清理旧的错误汇总产物后重跑，在同一命令末尾加：
 
 ```text
@@ -831,7 +834,7 @@ python code/10_reporting/build_final_report.py --model-alias all
 输出：
 
 ```text
-../cross_task_tool_neurons_data/outputs/final_report/
+../cross_task_tool_neurons_data/outputs/final_report/qwen3-4b-instruct/
 |-- model_summary.csv
 |-- neuron_discovery_summary.csv
 |-- training_run_summary.csv
@@ -841,6 +844,12 @@ python code/10_reporting/build_final_report.py --model-alias all
 |-- figures/ctd_counts.png
 |-- figures/trained_evaluation.png
 |-- figures/mask_ctd_causal_effect.png
+|-- figures/neuron_heatmap_qwen3-4b-instruct_single_hop.png
+|-- figures/neuron_heatmap_qwen3-4b-instruct_multi_hop.png
+|-- figures/source_heatmaps/qwen3-4b-instruct/single_hop_heatmap.png
+|-- figures/source_heatmaps/qwen3-4b-instruct/multi_hop_heatmap.png
+|-- figures/source_heatmaps/qwen3-4b-instruct/shared_neuron_heatmap_single_hop.png
+|-- figures/source_heatmaps/qwen3-4b-instruct/shared_neuron_heatmap_multi_hop.png
 |-- README_results.md
 |-- manifest.json
 ```
@@ -850,8 +859,10 @@ python code/10_reporting/build_final_report.py --model-alias all
 - 只读取阶段 2、5、6、7、8、9 的已生成产物，不重新跑模型。
 - 表格行都包含 `model_alias` 和 `subset`，支持 6 个模型结果合并。
 - `training_comparison.csv` 当前只写本实验新增的 `CTD-Masked-LoRA` 绝对指标；`Default` / `Sparse` / `Reason-then-Act` / `Probe&Prefill` 按 When2Tool 论文表格引用，不在本阶段伪造。
+- 默认按模型标签隔离 final report，避免 6 个模型结果互相覆盖；`all_models` 只用于跨模型汇总。
 - 生成 CTD 数量、训练后评测、Mask-CTD 因果效果三张轻量图。
-- 已存在 final report 且 manifest 参数一致时提前跳过。
+- 额外生成每个模型、每个 subset 的神经元密度热力图，合并展示 `TDN-A/B/C` 和 `CTD` 在 `layer x FFN module` 上的分布；同时复制阶段 5/6 原始热力图到 `figures/source_heatmaps/`。
+- 已存在对应模型 final report 且 manifest 参数一致时提前跳过。
 
 ## 命名规范
 
