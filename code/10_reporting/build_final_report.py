@@ -92,6 +92,36 @@ def default_report_dir(outputs_root: Path, model_arg: str, model_aliases: list[s
     return outputs_root / "final_report" / scope
 
 
+def collect_source_manifest_params(
+    model_aliases: list[str],
+    *,
+    labels_root: Path,
+    neurons_root: Path,
+    checkpoints_root: Path,
+    outputs_root: Path,
+    causal_root: Path,
+) -> dict[str, Any]:
+    sources: dict[str, Any] = {}
+    for model_alias in model_aliases:
+        model_sources: dict[str, Any] = {"labels": {}, "shared": {}, "training": {}, "evaluation": {}, "causal": {}}
+        for subset in SUBSETS:
+            model_sources["labels"][subset] = {}
+            for split in ["train", "test"]:
+                path = labels_root / model_alias / subset / split / "manifest.json"
+                if path.exists():
+                    model_sources["labels"][subset][split] = read_json(path).get("params", {})
+            for key, root_path in [
+                ("shared", neurons_root / model_alias / "shared_by_subset" / subset / "manifest.json"),
+                ("training", checkpoints_root / model_alias / "ctd_masked_lora" / subset / "manifest.json"),
+                ("evaluation", outputs_root / model_alias / "trained_evaluation" / subset / "manifest.json"),
+                ("causal", causal_root / model_alias / subset / "manifest.json"),
+            ]:
+                if root_path.exists():
+                    model_sources[key][subset] = read_json(root_path).get("params", {})
+        sources[model_alias] = model_sources
+    return sources
+
+
 def should_skip(report_dir: Path, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
     if clean:
         clean_directory(report_dir, data_root())
@@ -373,7 +403,19 @@ def main() -> None:
     }
     model_aliases = selected_models(args.model_alias, roots)
     report_dir = resolve_path(args.report_dir) if args.report_dir else default_report_dir(outputs_root, args.model_alias, model_aliases)
-    params = {"stage": "10_reporting", "model_aliases": model_aliases, "report_scope": report_dir.name}
+    params = {
+        "stage": "10_reporting",
+        "model_aliases": model_aliases,
+        "report_scope": report_dir.name,
+        "source_manifest_params": collect_source_manifest_params(
+            model_aliases,
+            labels_root=labels_root,
+            neurons_root=neurons_root,
+            checkpoints_root=checkpoints_root,
+            outputs_root=outputs_root,
+            causal_root=causal_root,
+        ),
+    }
     if should_skip(report_dir, params, args.overwrite, args.clean):
         return
     ensure_dir(report_dir)

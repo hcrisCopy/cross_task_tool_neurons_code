@@ -10,7 +10,7 @@ if str(COMMON_DIR) not in sys.path:
     sys.path.insert(0, str(COMMON_DIR))
 
 from cttn.data import SPLITS, SUBSETS, load_raw_tasks, summarize_records
-from cttn.io import read_jsonl, write_json, write_jsonl
+from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 
 
@@ -25,9 +25,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def should_skip(path: Path, overwrite: bool) -> bool:
-    if path.exists() and not overwrite:
-        print(f"Skip existing dataset: {path}")
+def expected_params(args: argparse.Namespace, raw_dir: Path, labels_root: Path) -> dict[str, Any]:
+    label_manifests: dict[str, Any] = {}
+    for subset in SUBSETS:
+        label_manifests[subset] = {}
+        for split in SPLITS:
+            manifest_path = labels_root / args.model_alias / subset / split / "manifest.json"
+            if not manifest_path.exists():
+                raise FileNotFoundError(f"Missing label manifest: {manifest_path}")
+            label_manifests[subset][split] = read_json(manifest_path).get("params", {})
+    return {
+        "stage": "03_dataset_building",
+        "model_alias": args.model_alias,
+        "raw_dataset_dir": str(raw_dir),
+        "labels_dir": str(labels_root / args.model_alias),
+        "label_manifest_params": label_manifests,
+    }
+
+
+def should_skip_model(model_out: Path, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
+    if clean:
+        clean_directory(model_out, data_root())
+        return False
+    expected = [model_out / subset / f"{split}.jsonl" for subset in SUBSETS for split in SPLITS]
+    manifest_path = model_out / "manifest.json"
+    if overwrite or not manifest_path.exists() or not all(path.exists() for path in expected):
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") == params:
+        print(f"Skip existing modified dataset: {model_out}")
         return True
     return False
 
@@ -54,13 +80,13 @@ def main() -> None:
     labels_root = resolve_path(args.labels_dir) if args.labels_dir else path_from_config("labels_dir")
     output_root = resolve_path(args.output_dir) if args.output_dir else path_from_config("modified_dataset_dir")
     model_out = output_root / args.model_alias
-    if args.clean and model_out.exists():
-        clean_directory(model_out, data_root())
+    params = expected_params(args, raw_dir, labels_root)
+    if should_skip_model(model_out, params, args.overwrite, args.clean):
+        return
     ensure_dir(model_out)
 
     manifest = {
-        "stage": "03_dataset_building",
-        "model_alias": args.model_alias,
+        "params": params,
         "subsets": {},
         "schema": {
             "task_type": "A/B/C task category derived from env_name",
@@ -74,8 +100,6 @@ def main() -> None:
         manifest["subsets"][subset] = {}
         for split in SPLITS:
             out_path = model_out / subset / f"{split}.jsonl"
-            if should_skip(out_path, args.overwrite):
-                continue
             raw_tasks = {str(task["id"]): task for task in load_raw_tasks(raw_dir, subset, split)}
             labels_path = labels_root / args.model_alias / subset / split / "labels.jsonl"
             if not labels_path.exists():

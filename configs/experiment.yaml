@@ -6,6 +6,13 @@ subsets:
 splits:
   - train
   - test
+formal_sample_counts:
+  single_hop:
+    train: 900
+    test: 2250
+  multi_hop:
+    train: 180
+    test: 450
 smoke_sample_counts:
   single_hop:
     train: 100

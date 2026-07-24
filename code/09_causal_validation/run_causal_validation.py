@@ -63,10 +63,20 @@ def subset_output_dir(causal_root: Path, model_alias: str, subset: str) -> Path:
     return causal_root / model_alias / subset
 
 
-def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
+def expected_params(
+    args: argparse.Namespace,
+    subset: str,
+    *,
+    model_path: Path,
+    tool_format: str,
+    dataset_manifest: dict[str, Any],
+    single_manifest: dict[str, Any],
+    shared_manifest: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "stage": "09_causal_validation",
         "model_alias": args.model_alias,
+        "model_path": str(model_path),
         "subset": subset,
         "max_test_samples": args.max_test_samples,
         "interventions": parse_interventions(args.interventions),
@@ -75,10 +85,16 @@ def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
         "torch_dtype": args.torch_dtype,
+        "device_map": args.device_map,
+        "record_mode": args.record_mode,
         "seed": args.seed,
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
+        "tool_format": tool_format,
+        "dataset_manifest_params": dataset_manifest.get("params", {}),
+        "single_type_manifest_params": single_manifest.get("params", {}),
+        "shared_neuron_manifest_params": shared_manifest.get("params", {}),
     }
 
 
@@ -155,8 +171,25 @@ def run_subset(
     out_dir: Path,
     w2t_utils: Any,
     tool_format: str,
+    model_path: Path,
 ) -> dict[str, Any] | None:
-    params = expected_params(args, subset)
+    shared_dir = neurons_root / args.model_alias / "shared_by_subset" / subset
+    single_dir = neurons_root / args.model_alias / "single_type_by_subset" / subset
+    shared_manifest_path = shared_dir / "manifest.json"
+    single_manifest_path = single_dir / "manifest.json"
+    if not shared_manifest_path.exists():
+        raise FileNotFoundError(f"Missing shared neuron manifest for {subset}: {shared_manifest_path}")
+    if not single_manifest_path.exists():
+        raise FileNotFoundError(f"Missing single-type manifest for {subset}: {single_manifest_path}")
+    params = expected_params(
+        args,
+        subset,
+        model_path=model_path,
+        tool_format=tool_format,
+        dataset_manifest=read_json(model_dataset / "manifest.json") if (model_dataset / "manifest.json").exists() else {},
+        single_manifest=read_json(single_manifest_path),
+        shared_manifest=read_json(shared_manifest_path),
+    )
     if should_skip(out_dir, params, args.overwrite, args.clean):
         return None
     ensure_dir(out_dir)
@@ -165,8 +198,6 @@ def run_subset(
     if args.max_test_samples > 0:
         data = data[: args.max_test_samples]
 
-    shared_dir = neurons_root / args.model_alias / "shared_by_subset" / subset
-    single_dir = neurons_root / args.model_alias / "single_type_by_subset" / subset
     ctd_rows = read_jsonl(shared_dir / "CTD_neurons.jsonl")
     random_rows = sample_random_like(ctd_rows, agent.model, seed=args.seed + len(subset), exclude_rows=ctd_rows)
     write_jsonl(out_dir / "random_mask_neurons.jsonl", random_rows)
@@ -305,6 +336,7 @@ def main() -> None:
                 out_dir=out_dir,
                 w2t_utils=w2t_utils,
                 tool_format=tool_format,
+                model_path=model_path,
             )
             if summary is not None:
                 root_manifest["subsets"][subset] = summary

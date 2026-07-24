@@ -43,6 +43,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument("--num-data-shards", type=int, default=1)
+    parser.add_argument("--data-shard-index", type=int, default=0)
+    parser.add_argument(
+        "--merge-data-shards",
+        action="store_true",
+        help="Merge precomputed data shards into the standard Stage 4 output files without loading the model.",
+    )
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -83,12 +90,33 @@ def output_dir(root: Path, model_alias: str, subset: str, split: str) -> Path:
     return root / model_alias / subset / split
 
 
-def expected_params(args: argparse.Namespace, *, model_path: Path, data_path: Path, subset: str, split: str, tool_format: str) -> dict[str, Any]:
-    return {
+def dataset_manifest_params(data_path: Path) -> dict[str, Any]:
+    manifest_path = data_path.parents[1] / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    return read_json(manifest_path).get("params", {})
+
+
+def shard_output_dir(root: Path, model_alias: str, subset: str, split: str, shard_index: int) -> Path:
+    return root / model_alias / "_activation_shards" / subset / split / f"shard_{shard_index:03d}"
+
+
+def expected_params(
+    args: argparse.Namespace,
+    *,
+    model_path: Path,
+    data_path: Path,
+    subset: str,
+    split: str,
+    tool_format: str,
+    shard_index: int | None = None,
+) -> dict[str, Any]:
+    params = {
         "stage": "04_activation_extraction",
         "model_alias": args.model_alias,
         "model_path": str(model_path),
         "dataset_path": str(data_path),
+        "dataset_manifest_params": dataset_manifest_params(data_path),
         "subset": subset,
         "split": split,
         "batch_size": args.batch_size,
@@ -101,7 +129,11 @@ def expected_params(args: argparse.Namespace, *, model_path: Path, data_path: Pa
         "enable_thinking": False,
         "tool_format": tool_format,
         "prompt_builder": "when2tool_init_state",
+        "num_data_shards": args.num_data_shards,
     }
+    if shard_index is not None:
+        params["data_shard_index"] = shard_index
+    return params
 
 
 def should_skip(out_dir: Path, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
@@ -119,6 +151,78 @@ def should_skip(out_dir: Path, params: dict[str, Any], overwrite: bool, clean: b
     return False
 
 
+def shard_bounds(n_rows: int, num_shards: int, shard_index: int) -> tuple[int, int]:
+    if num_shards < 1:
+        raise ValueError("--num-data-shards must be >= 1")
+    if shard_index < 0 or shard_index >= num_shards:
+        raise ValueError(f"--data-shard-index must be in [0, {num_shards - 1}], got {shard_index}")
+    start = (n_rows * shard_index) // num_shards
+    end = (n_rows * (shard_index + 1)) // num_shards
+    return start, end
+
+
+def merge_shards(
+    *,
+    final_dir: Path,
+    activation_root: Path,
+    model_alias: str,
+    subset: str,
+    split: str,
+    num_shards: int,
+    params: dict[str, Any],
+) -> None:
+    shard_dirs = [shard_output_dir(activation_root, model_alias, subset, split, idx) for idx in range(num_shards)]
+    missing = [path for path in shard_dirs if not (path / "activations.pt").exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing activation shard outputs: {missing[:3]}")
+
+    payloads = [torch.load(path / "activations.pt", map_location="cpu") for path in shard_dirs]
+    module_meta = payloads[0]["module_meta"]
+    module_keys = [meta["key"] for meta in module_meta]
+    for payload in payloads[1:]:
+        if payload["module_meta"] != module_meta:
+            raise ValueError("Activation shard module metadata do not match")
+
+    tensors = {
+        key: torch.cat([payload["activations"][key] for payload in payloads], dim=0).contiguous()
+        for key in module_keys
+    }
+    meta_rows: list[dict[str, Any]] = []
+    for path in shard_dirs:
+        meta_rows.extend(read_jsonl(path / "meta.jsonl"))
+    meta_rows.sort(key=lambda row: int(row["row_index"]))
+    for expected_index, row in enumerate(meta_rows):
+        if int(row["row_index"]) != expected_index:
+            raise ValueError(f"Shard merge row order gap at {expected_index}: got {row['row_index']}")
+    for row in meta_rows:
+        row.pop("row_index", None)
+
+    ensure_dir(final_dir)
+    torch.save(
+        {
+            "model_alias": model_alias,
+            "model_path": params["model_path"],
+            "subset": subset,
+            "split": split,
+            "tool_format": params["tool_format"],
+            "module_meta": module_meta,
+            "activations": tensors,
+        },
+        final_dir / "activations.pt",
+    )
+    write_jsonl(final_dir / "meta.jsonl", meta_rows)
+    summary = {
+        "count": len(meta_rows),
+        "module_count": len(module_meta),
+        "save_dtype": params["save_dtype"],
+        "batch_size": params["batch_size"],
+        "merged_data_shards": num_shards,
+    }
+    write_json(final_dir / "summary.json", summary)
+    write_json(final_dir / "manifest.json", {"params": params, "summary": summary})
+    print(f"Merged activation shards: {final_dir / 'activations.pt'}")
+
+
 def main() -> None:
     args = parse_args()
     model_path = resolve_model_path(args.model_alias, args.model_path)
@@ -127,6 +231,35 @@ def main() -> None:
     model_dataset = dataset_root / args.model_alias
     if not model_dataset.exists():
         raise FileNotFoundError(f"Missing modified dataset dir: {model_dataset}")
+
+    if args.merge_data_shards:
+        tool_format = infer_tool_format(args.model_alias, model_path)
+        subsets = ["single_hop", "multi_hop"] if args.subset == "all" else [args.subset]
+        splits = ["train", "test"] if args.split == "all" else [args.split]
+        for subset in subsets:
+            for split in splits:
+                data_path = model_dataset / subset / f"{split}.jsonl"
+                final_dir = output_dir(activation_root, args.model_alias, subset, split)
+                params = expected_params(
+                    args,
+                    model_path=model_path,
+                    data_path=data_path,
+                    subset=subset,
+                    split=split,
+                    tool_format=tool_format,
+                )
+                if should_skip(final_dir, params, args.overwrite, args.clean):
+                    continue
+                merge_shards(
+                    final_dir=final_dir,
+                    activation_root=activation_root,
+                    model_alias=args.model_alias,
+                    subset=subset,
+                    split=split,
+                    num_shards=args.num_data_shards,
+                    params=params,
+                )
+        return
 
     w2t_utils = load_utils(args.when2tool_repo)
     tool_format = infer_tool_format(args.model_alias, model_path)
@@ -164,13 +297,34 @@ def main() -> None:
     for subset in subsets:
         for split in splits:
             data_path = model_dataset / subset / f"{split}.jsonl"
-            out_dir = output_dir(activation_root, args.model_alias, subset, split)
-            params = expected_params(args, model_path=model_path, data_path=data_path, subset=subset, split=split, tool_format=tool_format)
+            out_dir = (
+                shard_output_dir(activation_root, args.model_alias, subset, split, args.data_shard_index)
+                if args.num_data_shards > 1
+                else output_dir(activation_root, args.model_alias, subset, split)
+            )
+            params = expected_params(
+                args,
+                model_path=model_path,
+                data_path=data_path,
+                subset=subset,
+                split=split,
+                tool_format=tool_format,
+                shard_index=args.data_shard_index if args.num_data_shards > 1 else None,
+            )
             if should_skip(out_dir, params, args.overwrite, args.clean):
                 continue
             rows = read_jsonl(data_path)
             if args.max_samples > 0:
                 rows = rows[: args.max_samples]
+            global_offset = 0
+            if args.num_data_shards > 1:
+                start, end = shard_bounds(len(rows), args.num_data_shards, args.data_shard_index)
+                rows = rows[start:end]
+                global_offset = start
+                print(
+                    f"{subset}/{split}: data shard {args.data_shard_index + 1}/{args.num_data_shards}, "
+                    f"rows [{start}, {end})"
+                )
             ensure_dir(out_dir)
 
             prompts = [build_prompt_text(task, tokenizer, w2t_utils, system_prompt, tool_format) for task in rows]
@@ -216,9 +370,10 @@ def main() -> None:
                         raise RuntimeError(f"Missing hook captures for modules: {missing[:5]}")
                     for meta in module_meta:
                         accum[meta["key"]].append(captures[meta["key"]])
-                    for task in batch_rows:
+                    for local_offset, task in enumerate(batch_rows, start=start):
                         meta_rows.append(
                             {
+                                "row_index": global_offset + local_offset,
                                 "id": str(task["id"]),
                                 "subset": subset,
                                 "split": split,

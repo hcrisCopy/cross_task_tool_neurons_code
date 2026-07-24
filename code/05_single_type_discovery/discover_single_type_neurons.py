@@ -33,9 +33,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heatmap-top-n", type=int, default=300)
     parser.add_argument("--epsilon", type=float, default=1.0e-8)
     parser.add_argument("--min-class-count", type=int, default=2)
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Device for SCAR tensor statistics: auto, cpu, cuda, or cuda:<index>.",
+    )
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
+
+
+def resolve_compute_device(value: str) -> torch.device:
+    if value == "auto":
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(value)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA device requested for Stage 5, but torch.cuda.is_available() is false")
+    return device
 
 
 def zscore(values: torch.Tensor, eps: float) -> torch.Tensor:
@@ -187,6 +201,7 @@ def expected_params(
         "heatmap_top_n": args.heatmap_top_n,
         "epsilon": args.epsilon,
         "min_class_count": args.min_class_count,
+        "device": args.device,
         "activation_path": str(activation_path),
         "meta_path": str(meta_path),
         "activation_manifest_params": activation_manifest.get("params", {}),
@@ -231,6 +246,8 @@ def main() -> None:
     subsets = ["single_hop", "multi_hop"] if args.subset == "all" else [args.subset]
     model_out_root = neurons_root / args.model_alias / "single_type_by_subset"
     viz_dir = viz_root / args.model_alias / "single_type_by_subset"
+    compute_device = resolve_compute_device(args.device)
+    print(f"Stage 5 compute device: {compute_device}")
 
     for subset in subsets:
         act_dir = activation_root / args.model_alias / subset / "train"
@@ -271,8 +288,14 @@ def main() -> None:
             idx_tensor = torch.tensor(indices, dtype=torch.long)
             for meta in module_meta:
                 key = meta["key"]
-                x = activations[key].index_select(0, idx_tensor)
-                score_pack[key] = compute_scar_for_module(x, labels, args.epsilon)
+                x = activations[key].index_select(0, idx_tensor).to(compute_device, non_blocking=True)
+                score_pack[key] = {
+                    name: tensor.cpu()
+                    for name, tensor in compute_scar_for_module(x, labels.to(compute_device), args.epsilon).items()
+                }
+                del x
+                if compute_device.type == "cuda":
+                    torch.cuda.empty_cache()
             rows = topk_rows(score_pack, module_meta, args.top_k)
             rows_by_type[task_type] = rows
 

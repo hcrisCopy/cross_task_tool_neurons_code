@@ -41,8 +41,8 @@ training:
   max_new_tokens: 2048
   max_model_len: 32768
 evaluation:
-  # Official When2Tool run_eval.py defaults to n_runs=3; smoke commands use 1.
-  n_runs: 1
+  # Official When2Tool run_eval.py defaults to n_runs=3; smoke commands may override to 1.
+  n_runs: 3
   batch_size: 1
   max_rounds: 10
   max_new_tokens: 2048

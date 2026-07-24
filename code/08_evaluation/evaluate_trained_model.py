@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
 
-    parser.add_argument("--n-runs", type=int, default=1)
+    parser.add_argument("--n-runs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-rounds", type=int, default=10)
     parser.add_argument("--max-new-tokens", type=int, default=2048)
@@ -49,10 +49,20 @@ def subset_output_dir(outputs_root: Path, model_alias: str, subset: str) -> Path
     return outputs_root / model_alias / "trained_evaluation" / subset
 
 
-def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
+def expected_params(
+    args: argparse.Namespace,
+    subset: str,
+    *,
+    model_path: Path,
+    dataset_manifest: dict[str, Any],
+    adapter_config: dict[str, Any],
+    training_manifest: dict[str, Any],
+    tool_format: str,
+) -> dict[str, Any]:
     return {
         "stage": "08_evaluation",
         "model_alias": args.model_alias,
+        "model_path": str(model_path),
         "subset": subset,
         "max_test_samples": args.max_test_samples,
         "n_runs": args.n_runs,
@@ -61,10 +71,16 @@ def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
         "torch_dtype": args.torch_dtype,
+        "device_map": args.device_map,
+        "record_mode": args.record_mode,
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
         "method": "CTD-Masked-LoRA",
+        "tool_format": tool_format,
+        "dataset_manifest_params": dataset_manifest.get("params", {}),
+        "adapter_config": adapter_config,
+        "training_manifest_params": training_manifest.get("params", {}),
     }
 
 
@@ -93,7 +109,22 @@ def evaluate_subset(
     w2t_utils: Any,
     w2t_model: Any,
 ) -> dict[str, Any] | None:
-    params = expected_params(args, subset)
+    adapter_dir = checkpoints_root / args.model_alias / "ctd_masked_lora" / subset / "adapter"
+    if not adapter_dir.exists():
+        raise FileNotFoundError(f"Missing adapter for {subset}: {adapter_dir}")
+    training_manifest_path = checkpoints_root / args.model_alias / "ctd_masked_lora" / subset / "manifest.json"
+    if not training_manifest_path.exists():
+        raise FileNotFoundError(f"Missing training manifest for {subset}: {training_manifest_path}")
+    tool_format = infer_tool_format(args.model_alias, model_path)
+    params = expected_params(
+        args,
+        subset,
+        model_path=model_path,
+        dataset_manifest=read_json(model_dataset / "manifest.json") if (model_dataset / "manifest.json").exists() else {},
+        adapter_config=read_json(adapter_dir / "adapter_config.json"),
+        training_manifest=read_json(training_manifest_path),
+        tool_format=tool_format,
+    )
     if should_skip(out_dir, params, args.overwrite, args.clean):
         return None
     ensure_dir(out_dir)
@@ -101,11 +132,6 @@ def evaluate_subset(
     data = read_jsonl(model_dataset / subset / "test.jsonl")
     if args.max_test_samples > 0:
         data = data[: args.max_test_samples]
-    adapter_dir = checkpoints_root / args.model_alias / "ctd_masked_lora" / subset / "adapter"
-    if not adapter_dir.exists():
-        raise FileNotFoundError(f"Missing adapter for {subset}: {adapter_dir}")
-
-    tool_format = infer_tool_format(args.model_alias, model_path)
     system_prompt = w2t_utils.get_system_prompt(tool_format)
     normalizer = w2t_model._normalize_generation_output
 

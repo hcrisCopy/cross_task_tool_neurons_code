@@ -72,10 +72,19 @@ def subset_output_dir(checkpoints_root: Path, model_alias: str, subset: str) -> 
     return checkpoints_root / model_alias / "ctd_masked_lora" / subset
 
 
-def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
+def expected_params(
+    args: argparse.Namespace,
+    subset: str,
+    *,
+    model_path: Path,
+    dataset_manifest: dict[str, Any],
+    shared_manifest: dict[str, Any],
+    tool_format: str,
+) -> dict[str, Any]:
     return {
         "stage": "07_training",
         "model_alias": args.model_alias,
+        "model_path": str(model_path),
         "subset": subset,
         "max_train_samples": args.max_train_samples,
         "rank": args.rank,
@@ -86,15 +95,23 @@ def expected_params(args: argparse.Namespace, subset: str) -> dict[str, Any]:
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "learning_rate": args.learning_rate,
         "warmup_ratio": args.warmup_ratio,
+        "max_grad_norm": args.max_grad_norm,
         "max_seq_length": args.max_seq_length,
         "torch_dtype": args.torch_dtype,
+        "device_map": args.device_map,
+        "gradient_checkpointing": args.gradient_checkpointing,
         "trajectory_attempts": args.trajectory_attempts,
+        "trajectory_batch_size": args.trajectory_batch_size,
         "max_rounds": args.max_rounds,
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
+        "record_mode": args.record_mode,
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
+        "tool_format": tool_format,
+        "dataset_manifest_params": dataset_manifest.get("params", {}),
+        "shared_neuron_manifest_params": shared_manifest.get("params", {}),
     }
 
 
@@ -450,7 +467,18 @@ def train_subset(
     w2t_utils: Any,
     w2t_model: Any,
 ) -> None:
-    params = expected_params(args, subset)
+    tool_format = infer_tool_format(args.model_alias, model_path)
+    shared_manifest_path = shared_root / subset / "manifest.json"
+    if not shared_manifest_path.exists():
+        raise FileNotFoundError(f"Missing shared neuron manifest for {subset}: {shared_manifest_path}")
+    params = expected_params(
+        args,
+        subset,
+        model_path=model_path,
+        dataset_manifest=read_json(model_dataset / "manifest.json") if (model_dataset / "manifest.json").exists() else {},
+        shared_manifest=read_json(shared_manifest_path),
+        tool_format=tool_format,
+    )
     if should_skip(out_dir, params, args.overwrite, args.clean):
         return
     ensure_dir(out_dir)
@@ -463,7 +491,6 @@ def train_subset(
     if not ctd_rows:
         raise ValueError(f"No CTD neurons found for {subset}: {ctd_path}")
 
-    tool_format = infer_tool_format(args.model_alias, model_path)
     system_prompt = w2t_utils.get_system_prompt(tool_format)
     normalizer = w2t_model._normalize_generation_output
 

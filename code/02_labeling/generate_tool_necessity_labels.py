@@ -37,10 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
 
-    parser.add_argument("--single-train-count", type=int, default=100)
-    parser.add_argument("--single-test-count", type=int, default=30)
-    parser.add_argument("--multi-train-count", type=int, default=40)
-    parser.add_argument("--multi-test-count", type=int, default=30)
+    parser.add_argument("--single-train-count", type=int, default=900)
+    parser.add_argument("--single-test-count", type=int, default=2250)
+    parser.add_argument("--multi-train-count", type=int, default=180)
+    parser.add_argument("--multi-test-count", type=int, default=450)
 
     parser.add_argument("--backend", default="vllm", choices=["vllm", "hf"])
     parser.add_argument(
