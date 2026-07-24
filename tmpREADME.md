@@ -187,6 +187,8 @@ final report: ../cross_task_tool_neurons_data/outputs/final_report/qwen3-4b-inst
 
 说明：阶段 2 参数已对齐 When2Tool 官方 `src/extract_features.py` 默认值：`max_new_tokens=2048`、`max_rounds=12`、`max_model_len=32768`。`tensor_parallel_size` 是硬件并行参数，不作为实验方法变量；当前 qwen3-4b-instruct 单卡跑通命令使用 `1`。阶段 4 的模型前向 dtype 用 `bfloat16`，激活保存 dtype 用 `float32`；原因是官方特征抽取保存 hidden states 时使用 `.float()`，而本实验后续 SCAR 需要均值/方差统计，默认保存 32 位更稳。
 
+2026-07-25 修复说明：阶段 4 已改为复用 When2Tool 官方 `init_state(...)` 构造 `messages/tools`，因此此前基于手工 `system + user` prompt 抽取的正式激活及其下游阶段 5-9 产物只作为历史 smoke 记录保留；严格实验请从阶段 4 开始重跑到阶段 10。阶段 4/5/6 的 manifest 已加入参数敏感跳过，重跑时若检测到旧 manifest 参数不一致会自动覆盖生成。
+
 When2Tool 官方仓库不复制进本仓库；运行时放在同级 `../when2tool_repo`，用于导入官方 env、tool schema、prompt、state machine 和 vLLM/HF wrapper。若不存在，先运行：
 
 ```text
