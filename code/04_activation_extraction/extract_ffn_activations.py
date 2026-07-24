@@ -12,7 +12,7 @@ if str(COMMON_DIR) not in sys.path:
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from cttn.io import read_jsonl, write_json, write_jsonl
+from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.modeling import find_ffn_target_modules, infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 from cttn.progress import progress
@@ -66,25 +66,54 @@ def apply_chat_template(tokenizer: Any, messages: list[dict[str, str]], tools: l
         return tokenizer.apply_chat_template(messages, **kwargs)
 
 
-def build_prompt_text(task: dict[str, Any], tokenizer: Any, w2t_utils: Any, system_prompt: str) -> str:
-    user_content = w2t_utils.build_user_message(task["instruction"], "current", require_reasoning=False)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
-    tools_schema = w2t_utils.build_tools_schema(task)
-    return apply_chat_template(tokenizer, messages, tools_schema)
+def build_prompt_text(task: dict[str, Any], tokenizer: Any, w2t_utils: Any, system_prompt: str, tool_format: str) -> str:
+    state = w2t_utils.init_state(
+        task,
+        system_prompt,
+        record_mode="lite",
+        prompt_mode="current",
+        require_reasoning=False,
+        tool_format=tool_format,
+        tokenizer=tokenizer,
+    )
+    return apply_chat_template(tokenizer, state["messages"], state["tools"])
 
 
 def output_dir(root: Path, model_alias: str, subset: str, split: str) -> Path:
     return root / model_alias / subset / split
 
 
-def should_skip(out_dir: Path, overwrite: bool, clean: bool) -> bool:
+def expected_params(args: argparse.Namespace, *, model_path: Path, data_path: Path, subset: str, split: str, tool_format: str) -> dict[str, Any]:
+    return {
+        "stage": "04_activation_extraction",
+        "model_alias": args.model_alias,
+        "model_path": str(model_path),
+        "dataset_path": str(data_path),
+        "subset": subset,
+        "split": split,
+        "batch_size": args.batch_size,
+        "torch_dtype": args.torch_dtype,
+        "save_dtype": args.save_dtype,
+        "device_map": args.device_map,
+        "max_samples": args.max_samples,
+        "prompt_mode": "current",
+        "reasoning_mode": "no_reasoning",
+        "enable_thinking": False,
+        "tool_format": tool_format,
+        "prompt_builder": "when2tool_init_state",
+    }
+
+
+def should_skip(out_dir: Path, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
     if clean:
         clean_directory(out_dir, data_root())
         return False
-    if (out_dir / "activations.pt").exists() and (out_dir / "meta.jsonl").exists() and not overwrite:
+    manifest_path = out_dir / "manifest.json"
+    expected_files = [out_dir / "activations.pt", out_dir / "meta.jsonl", out_dir / "summary.json", manifest_path]
+    if overwrite or not all(path.exists() for path in expected_files):
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") == params:
         print(f"Skip existing activations: {out_dir}")
         return True
     return False
@@ -136,14 +165,15 @@ def main() -> None:
         for split in splits:
             data_path = model_dataset / subset / f"{split}.jsonl"
             out_dir = output_dir(activation_root, args.model_alias, subset, split)
-            if should_skip(out_dir, args.overwrite, args.clean):
+            params = expected_params(args, model_path=model_path, data_path=data_path, subset=subset, split=split, tool_format=tool_format)
+            if should_skip(out_dir, params, args.overwrite, args.clean):
                 continue
             rows = read_jsonl(data_path)
             if args.max_samples > 0:
                 rows = rows[: args.max_samples]
             ensure_dir(out_dir)
 
-            prompts = [build_prompt_text(task, tokenizer, w2t_utils, system_prompt) for task in rows]
+            prompts = [build_prompt_text(task, tokenizer, w2t_utils, system_prompt, tool_format) for task in rows]
             accum: dict[str, list[torch.Tensor]] = {meta["key"]: [] for meta in module_meta}
             meta_rows: list[dict[str, Any]] = []
             handles = []
@@ -230,11 +260,7 @@ def main() -> None:
             write_json(
                 out_dir / "manifest.json",
                 {
-                    "stage": "04_activation_extraction",
-                    "model_alias": args.model_alias,
-                    "subset": subset,
-                    "split": split,
-                    "params": vars(args),
+                    "params": params,
                     "summary": summary,
                 },
             )

@@ -290,7 +290,7 @@ python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b
 - `hard_no_tool` 先使用 no-tool prompt，再在 state machine 里拒绝工具调用。
 - 每个 split 先按 A/B/C 和 difficulty 抽候选样本，再按跑出的 `tool_necessary=0/1` 二次筛选目标数量。
 - `tool_necessary = 1 - no_tool_correct`，只来自该模型 hard no-tool 结果。
-- 已存在且 manifest 参数一致时提前跳过；`--clean` 会先删除该阶段对应模型/split 产物。
+- 已存在且 manifest 参数一致时提前跳过；manifest 会记录 `tensor_parallel_size`、`max_model_len`、`vllm_dtype`、`record_mode` 等生成相关参数，参数变化会自动重跑；`--clean` 会先删除该阶段对应模型/split 产物。
 
 ## 阶段 3：改造后数据集构建
 
@@ -411,12 +411,14 @@ python code/04_activation_extraction/extract_ffn_activations.py --model-alias qw
 做法：
 
 - 激活 prompt 固定 `current + no_reasoning + enable_thinking=false`。
+- prompt 构造直接调用 When2Tool 官方 `init_state(...)`，再从 state 中取 `messages/tools` 渲染 chat template；因此会保留官方的 `ListManipulationEnv` 特殊 system prompt、`dialog` 字段样本、工具 schema 和状态机初始化细节。
 - 系统提示按模型分流：Qwen 使用 XML `<tool_call>`，Llama 使用 native tool calling。
 - 每条样本只暴露自己所属 env 的 tool schema。
 - hook 目标模块为 `mlp.gate_proj`、`mlp.up_proj`、`mlp.down_proj`。
 - 每个样本只保存最后一个输入 token 的 FFN 模块输出坐标，不做 token 平均。
 - `--torch-dtype bfloat16` 控制模型前向；`--save-dtype float32` 控制写入磁盘的 activation dtype，显式对齐 When2Tool `.float()` 特征保存方式。
 - `activations.pt` 保存 `{module_key: tensor[num_samples, dim]}`，`meta.jsonl` 保存 id、A/B/C、label、difficulty。
+- 已存在且 manifest 参数一致时提前跳过；manifest 会记录 `prompt_builder=when2tool_init_state`、`tool_format`、dtype、batch size、输入数据路径等关键参数，参数变化会自动重跑。
 
 ## 阶段 5：单类型神经元探测
 
@@ -511,6 +513,7 @@ python code/05_single_type_discovery/discover_single_type_neurons.py --model-ali
 - 每个类型从全模型候选 FFN 输出坐标中全局选 `top_k=5000`，不按层、不按模块分配名额。
 - 同阶段生成两类热力图：原有 `layer x FFN module` 密度图，以及新增的 `TDN-SCAR` 细粒度神经元图；新增图只展示已选 top 神经元，不参与神经元选择。
 - `--heatmap-top-n` 控制 `TDN-SCAR` 图展示前多少个神经元，默认 `300`。
+- 已存在且 manifest 参数一致时提前跳过；manifest 会记录本阶段参数以及阶段 4 激活 manifest 参数，因此 Stage 4 prompt/dtype/输入变化后本阶段会自动重跑。
 
 ## 阶段 6：共享神经元发现
 
@@ -599,6 +602,7 @@ python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4
 - `share_rate = |CTD| / |TDN_c|`，分别对 A/B/C 汇总。
 - 同阶段生成两类热力图：原有 CTD `layer x FFN module` 密度图，以及新增的 `CTD-SCAR` 细粒度共享神经元图。
 - `CTD-SCAR` 图分别按 `score_min=min(score_A, score_B, score_C)` 和 `score_mean=mean(score_A, score_B, score_C)` 排序展示；`--heatmap-top-n` 默认展示前 `300` 个 CTD 神经元。
+- 已存在且 manifest 参数一致时提前跳过；manifest 会记录本阶段参数以及阶段 5 单类型神经元 manifest 参数，因此 Stage 5 参数或上游激活变化后本阶段会自动重跑。
 
 ## 阶段 7：CTD-Masked LoRA 训练
 
@@ -667,6 +671,7 @@ python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct
 - `tool_necessary=1` 重新用 base 模型在 `current/no_reasoning` 下走 When2Tool state machine，保留工具调用成功且 final answer 正确的完整工具轨迹。
 - loss 只算 assistant 产生的 token；system/user/tool response token 全部 mask 为 `-100`。
 - CTD-Masked LoRA 冻结 backbone，只训练 FFN 目标模块旁路 LoRA；LoRA 输出更新乘 `CTD_{m,s}` mask，mask 为 0 的坐标没有 LoRA 更新。
+- 实现差异：阶段 7 为了加载自定义 CTD-Masked LoRA，生成轨迹和训练使用 `HFGenerationAgent` / HF backend；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码，不使用 Probe&Prefill。
 - 已存在 adapter 且 manifest 参数一致时提前跳过；adapter 不存在但 `training_examples.jsonl` 已存在时复用轨迹继续训练。
 
 ## 阶段 8：训练后评测
@@ -729,7 +734,9 @@ python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instr
 - 评测 prompt 固定为 When2Tool Default：`current/no_reasoning/enable_thinking=false`，不做 Probe&Prefill。
 - 指标对齐 When2Tool：Final Accuracy、Total Tool Calls、Avg Tool Calls、Tool Call Rate、Total/Avg Token Cost。
 - 额外保存工具决策诊断：DecisionAcc、OverCall、UnderCall、tool precision/recall/F1、valid tool-call rate。
+- 实现差异：阶段 8 为了加载 CTD-Masked LoRA adapter，生成后端使用 HFGenerationAgent；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
 - smoke 命令用 `--n-runs 1`；正式和 When2Tool 论文主表对齐时改为 `--n-runs 3`。
+- `summary_table.csv` 在 `n_runs=1` 时写单次指标；`n_runs>1` 时写完整 mean/std 扁平表，例如 `final_accuracy_mean`、`final_accuracy_std`。
 - 已存在 summary 和 manifest 参数一致时提前跳过。
 
 ## 阶段 9：因果验证
@@ -800,6 +807,7 @@ python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b
 - `Mask-Random` 与 `CTD` 保持同层、同模块、同数量分布，并记录 `random_mask_neurons.jsonl`。
 - `Private_c = TDN_c \ CTD`。
 - 输出每个干预的 When2Tool 主指标和工具决策指标，并额外汇总跨 A/B/C 的 `avg_delta_acc`、`var_acc`、`avg_delta_tcr`。
+- 实现差异：阶段 9 为了注册 activation hook 做神经元 mask，生成后端使用 HFGenerationAgent；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码。
 - 已存在 summary 和 manifest 参数一致时提前跳过。
 
 ## 阶段 10：结果汇总和可视化

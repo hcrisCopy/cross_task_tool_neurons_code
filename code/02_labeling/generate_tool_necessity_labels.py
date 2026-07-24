@@ -188,8 +188,13 @@ def main() -> None:
                     "enable_thinking": False,
                     "tool_format": tool_format,
                     "backend": args.backend,
+                    "tensor_parallel_size": args.tensor_parallel_size,
                     "max_rounds": args.max_rounds,
                     "max_new_tokens": args.max_new_tokens,
+                    "max_model_len": args.max_model_len,
+                    "vllm_dtype": args.vllm_dtype,
+                    "record_mode": args.record_mode,
+                    "require_per_type_labels": args.require_per_type_labels,
                 }
                 out_dir = output_dir_for(labels_root, args.model_alias, subset, split)
                 if should_skip(out_dir, params, args.overwrite, args.clean):

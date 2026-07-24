@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from cttn.data import TASK_TYPES
-from cttn.io import read_jsonl, write_json, write_jsonl
+from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 
 
@@ -147,10 +147,7 @@ def load_module_dims(single_root: Path, subset: str) -> dict[tuple[int, str], in
     meta_path = single_root / subset / "module_meta.json"
     if not meta_path.exists():
         return {}
-    import json
-
-    with meta_path.open("r", encoding="utf-8") as f:
-        module_meta = json.load(f)
+    module_meta = read_json(meta_path)
     return {(int(meta["layer"]), str(meta["module"])): int(meta["dim"]) for meta in module_meta}
 
 
@@ -168,13 +165,27 @@ def clean_visualizations(viz_dir: Path, subset: str) -> None:
             path.unlink()
 
 
-def should_skip(out_dir: Path, viz_dir: Path, subset: str, overwrite: bool, clean: bool) -> bool:
+def expected_params(args: argparse.Namespace, *, single_manifest: dict[str, Any], subset: str) -> dict[str, Any]:
+    return {
+        "stage": "06_shared_discovery",
+        "model_alias": args.model_alias,
+        "subset": subset,
+        "heatmap_top_n": args.heatmap_top_n,
+        "single_type_manifest_params": single_manifest.get("params", {}),
+    }
+
+
+def should_skip(out_dir: Path, viz_dir: Path, subset: str, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
     if clean:
         clean_directory(out_dir, data_root())
         clean_visualizations(viz_dir, subset)
         return False
-    expected = [out_dir / "CTD_neurons.jsonl", *expected_visualizations(viz_dir, subset)]
-    if all(path.exists() for path in expected) and not overwrite:
+    manifest_path = out_dir / "manifest.json"
+    expected = [out_dir / "CTD_neurons.jsonl", manifest_path, *expected_visualizations(viz_dir, subset)]
+    if overwrite or not all(path.exists() for path in expected):
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") == params:
         print(f"Skip existing shared neurons: {out_dir}")
         return True
     return False
@@ -194,7 +205,11 @@ def main() -> None:
 
     for subset in subsets:
         out_dir = shared_root / subset
-        if should_skip(out_dir, viz_dir, subset, args.overwrite, args.clean):
+        single_manifest_path = single_root / subset / "manifest.json"
+        if not single_manifest_path.exists():
+            raise FileNotFoundError(f"Missing single-type manifest for {subset}: {single_manifest_path}")
+        params = expected_params(args, single_manifest=read_json(single_manifest_path), subset=subset)
+        if should_skip(out_dir, viz_dir, subset, params, args.overwrite, args.clean):
             continue
         ensure_dir(out_dir)
         by_type = {task_type: read_tdn(single_root, subset, task_type) for task_type in TASK_TYPES}
@@ -254,7 +269,7 @@ def main() -> None:
             },
         }
         write_json(out_dir / "summary.json", summary)
-        write_json(out_dir / "manifest.json", {"params": vars(args), "summary": summary})
+        write_json(out_dir / "manifest.json", {"params": params, "summary": summary})
         manifest["subsets"][subset] = summary
         global_rows.extend(share_rows)
         print(f"{subset}: CTD={len(ctd)}, pairwise={summary['pairwise_counts']}")

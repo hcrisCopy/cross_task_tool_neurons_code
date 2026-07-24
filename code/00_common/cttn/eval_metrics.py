@@ -163,6 +163,38 @@ def flatten_summary(
     return rows
 
 
+def flatten_mean_std_summary(
+    summary: dict[str, Any],
+    *,
+    model_alias: str,
+    subset: str,
+    method: str,
+    extra: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    rows = []
+    base = {"model_alias": model_alias, "subset": subset, "method": method}
+    if extra:
+        base.update(extra)
+
+    def add(group_kind: str, group_name: str, metrics: dict[str, Any]) -> None:
+        row = dict(base)
+        row.update({"group_kind": group_kind, "group_name": group_name})
+        for metric_name, stat in metrics.items():
+            if isinstance(stat, dict):
+                if "mean" in stat:
+                    row[f"{metric_name}_mean"] = stat.get("mean")
+                if "std" in stat:
+                    row[f"{metric_name}_std"] = stat.get("std")
+        rows.append(row)
+
+    add("overall", "overall", summary.get("overall", {}))
+    for kind in ["by_task_type", "by_env", "by_difficulty", "by_tool_necessary"]:
+        group_kind = kind.replace("by_", "")
+        for name, metrics in summary.get(kind, {}).items():
+            add(group_kind, str(name), metrics)
+    return rows
+
+
 def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from cttn.data import TASK_TYPES
-from cttn.io import read_jsonl, write_json, write_jsonl
+from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 
 
@@ -171,7 +171,29 @@ def clean_visualizations(viz_dir: Path, subset: str) -> None:
             path.unlink()
 
 
-def should_skip(out_root: Path, viz_dir: Path, subset: str, overwrite: bool, clean: bool) -> bool:
+def expected_params(
+    args: argparse.Namespace,
+    *,
+    activation_manifest: dict[str, Any],
+    activation_path: Path,
+    meta_path: Path,
+    subset: str,
+) -> dict[str, Any]:
+    return {
+        "stage": "05_single_type_discovery",
+        "model_alias": args.model_alias,
+        "subset": subset,
+        "top_k": args.top_k,
+        "heatmap_top_n": args.heatmap_top_n,
+        "epsilon": args.epsilon,
+        "min_class_count": args.min_class_count,
+        "activation_path": str(activation_path),
+        "meta_path": str(meta_path),
+        "activation_manifest_params": activation_manifest.get("params", {}),
+    }
+
+
+def should_skip(out_root: Path, viz_dir: Path, subset: str, params: dict[str, Any], overwrite: bool, clean: bool) -> bool:
     subset_dir = out_root / subset
     if clean:
         clean_directory(subset_dir, data_root())
@@ -179,7 +201,12 @@ def should_skip(out_root: Path, viz_dir: Path, subset: str, overwrite: bool, cle
         return False
     expected = [subset_dir / task_type / "TDN_neurons.jsonl" for task_type in TASK_TYPES]
     expected.extend(expected_visualizations(viz_dir, subset))
-    if all(path.exists() for path in expected) and not overwrite:
+    manifest_path = subset_dir / "manifest.json"
+    expected.append(manifest_path)
+    if overwrite or not all(path.exists() for path in expected):
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") == params:
         print(f"Skip existing single-type neurons: {subset_dir}")
         return True
     return False
@@ -206,13 +233,22 @@ def main() -> None:
     viz_dir = viz_root / args.model_alias / "single_type_by_subset"
 
     for subset in subsets:
-        if should_skip(model_out_root, viz_dir, subset, args.overwrite, args.clean):
-            continue
         act_dir = activation_root / args.model_alias / subset / "train"
         activation_path = act_dir / "activations.pt"
         meta_path = act_dir / "meta.jsonl"
-        if not activation_path.exists() or not meta_path.exists():
+        activation_manifest_path = act_dir / "manifest.json"
+        if not activation_path.exists() or not meta_path.exists() or not activation_manifest_path.exists():
             raise FileNotFoundError(f"Missing train activations for {subset}: {act_dir}")
+        activation_manifest = read_json(activation_manifest_path)
+        params = expected_params(
+            args,
+            activation_manifest=activation_manifest,
+            activation_path=activation_path,
+            meta_path=meta_path,
+            subset=subset,
+        )
+        if should_skip(model_out_root, viz_dir, subset, params, args.overwrite, args.clean):
+            continue
         payload = torch.load(activation_path, map_location="cpu")
         activations: dict[str, torch.Tensor] = payload["activations"]
         module_meta = payload["module_meta"]
@@ -281,10 +317,7 @@ def main() -> None:
         write_json(
             model_out_root / subset / "manifest.json",
             {
-                "stage": "05_single_type_discovery",
-                "model_alias": args.model_alias,
-                "subset": subset,
-                "params": vars(args),
+                "params": params,
                 "summary": summary,
                 "visualizations": summary["visualizations"],
             },

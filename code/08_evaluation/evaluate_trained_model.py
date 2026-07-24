@@ -14,7 +14,7 @@ import torch
 
 from cttn.agent import HFGenerationAgent
 from cttn.data import SUBSETS
-from cttn.eval_metrics import aggregate_run_summaries, build_per_task, build_summary, flatten_summary, write_csv
+from cttn.eval_metrics import aggregate_run_summaries, build_per_task, build_summary, flatten_mean_std_summary, flatten_summary, write_csv
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
@@ -155,6 +155,13 @@ def evaluate_subset(
         if args.n_runs == 1:
             flat_rows = flatten_summary(
                 summary_payload,
+                model_alias=args.model_alias,
+                subset=subset,
+                method="CTD-Masked-LoRA",
+            )
+        else:
+            flat_rows = flatten_mean_std_summary(
+                summary_payload["mean_std"],
                 model_alias=args.model_alias,
                 subset=subset,
                 method="CTD-Masked-LoRA",
