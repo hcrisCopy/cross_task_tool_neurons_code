@@ -603,13 +603,44 @@ code/11_multigpu/
 |-- multi_hop/
 ```
 
-待补充内容：
+运行指令：
 
-- [ ] 训练轨迹构造
-- [ ] CTD mask 构造
-- [ ] LoRA adapter 注入
-- [ ] assistant token loss mask
-- [ ] checkpoint manifest
+```text
+python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+```
+
+如需清理旧的错误训练产物后重跑，在同一命令末尾加：
+
+```text
+--clean
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/checkpoints/qwen3-4b-instruct/ctd_masked_lora/
+|-- single_hop/adapter/adapter_model.pt
+|-- single_hop/adapter/adapter_config.json
+|-- single_hop/training_log.csv
+|-- single_hop/training_examples.jsonl
+|-- single_hop/skipped_examples.jsonl
+|-- single_hop/skipped_tokenization_examples.jsonl
+|-- single_hop/trajectory_summary.json
+|-- single_hop/mask_summary.json
+|-- single_hop/summary.json
+|-- single_hop/manifest.json
+|-- multi_hop/...
+```
+
+做法：
+
+- 只使用 `train` split；single-hop 和 multi-hop 分别训练两个 adapter。
+- 训练轨迹固定对齐 `current/no_reasoning/enable_thinking=false`。
+- `tool_necessary=0` 使用阶段 2 hard-no-tool 答对的 direct answer 作为 assistant target，但放在工具可用 prompt 下训练。
+- `tool_necessary=1` 重新用 base 模型在 `current/no_reasoning` 下走 When2Tool state machine，保留工具调用成功且 final answer 正确的完整工具轨迹。
+- loss 只算 assistant 产生的 token；system/user/tool response token 全部 mask 为 `-100`。
+- CTD-Masked LoRA 冻结 backbone，只训练 FFN 目标模块旁路 LoRA；LoRA 输出更新乘 `CTD_{m,s}` mask，mask 为 0 的坐标没有 LoRA 更新。
+- 已存在 adapter 且 manifest 参数一致时提前跳过；adapter 不存在但 `training_examples.jsonl` 已存在时复用轨迹继续训练。
 
 ## 阶段 8：训练后评测
 
@@ -639,12 +670,40 @@ code/11_multigpu/
 |-- multi_hop/
 ```
 
-待补充内容：
+运行指令：
 
-- [ ] 加载 CTD-Masked LoRA adapter
-- [ ] current/no-reasoning test split 评测
-- [ ] When2Tool 指标聚合
-- [ ] 按 overall / env / difficulty / A-B-C 分组
+```text
+python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+```
+
+如需清理旧的错误评测产物后重跑，在同一命令末尾加：
+
+```text
+--clean
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/outputs/qwen3-4b-instruct/trained_evaluation/
+|-- manifest.json
+|-- single_hop/outputs.json
+|-- single_hop/per_task.jsonl
+|-- single_hop/summary.json
+|-- single_hop/summary_table.csv
+|-- single_hop/manifest.json
+|-- multi_hop/...
+```
+
+做法：
+
+- 只使用 `test` split；single-hop 和 multi-hop 分开评测。
+- 加载阶段 7 对应 subset 的 CTD-Masked LoRA adapter。
+- 评测 prompt 固定为 When2Tool Default：`current/no_reasoning/enable_thinking=false`，不做 Probe&Prefill。
+- 指标对齐 When2Tool：Final Accuracy、Total Tool Calls、Avg Tool Calls、Tool Call Rate、Total/Avg Token Cost。
+- 额外保存工具决策诊断：DecisionAcc、OverCall、UnderCall、tool precision/recall/F1、valid tool-call rate。
+- smoke 命令用 `--n-runs 1`；正式和 When2Tool 论文主表对齐时改为 `--n-runs 3`。
+- 已存在 summary 和 manifest 参数一致时提前跳过。
 
 ## 阶段 9：因果验证
 
@@ -677,12 +736,44 @@ code/11_multigpu/
 |-- multi_hop/
 ```
 
-待补充内容：
+运行指令：
 
-- [ ] Base vs Mask-CTD 因果验证
-- [ ] mask hook
-- [ ] 工具行为指标
-- [ ] 因果验证汇总表
+```text
+python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+```
+
+如需清理旧的错误因果验证产物后重跑，在同一命令末尾加：
+
+```text
+--clean
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/causal_validation/qwen3-4b-instruct/
+|-- manifest.json
+|-- single_hop/summary_table.csv
+|-- single_hop/cross_type_summary.csv
+|-- single_hop/random_mask_neurons.jsonl
+|-- single_hop/A/Base/outputs.json
+|-- single_hop/A/Base/per_task.jsonl
+|-- single_hop/A/Base/summary.json
+|-- single_hop/A/Mask-CTD/...
+|-- single_hop/B/...
+|-- single_hop/C/...
+|-- multi_hop/...
+```
+
+做法：
+
+- 只使用 `test` split；因果验证使用未训练的 base 模型，不加载阶段 7 adapter。
+- 对每个 subset 和 A/B/C 分别评估 `Base`、`Mask-Random`、`Mask-TDN_c`、`Mask-CTD`、`Mask-Private_c`。
+- activation mask 作用在 FFN 目标模块输出坐标上，并覆盖所有 token 位置：`a[..., i]=0`。
+- `Mask-Random` 与 `CTD` 保持同层、同模块、同数量分布，并记录 `random_mask_neurons.jsonl`。
+- `Private_c = TDN_c \ CTD`。
+- 输出每个干预的 When2Tool 主指标和工具决策指标，并额外汇总跨 A/B/C 的 `avg_delta_acc`、`var_acc`、`avg_delta_tcr`。
+- 已存在 summary 和 manifest 参数一致时提前跳过。
 
 ## 阶段 10：结果汇总和可视化
 
@@ -716,13 +807,48 @@ code/10_reporting/
 
 本实验暂不复现 When2Tool baseline。`Default` / `Sparse` / `Reason-then-Act` / `Probe&Prefill` 结果直接引用 When2Tool 论文表格。本实验只新增运行 `CTD-Masked-LoRA`，并在相同模型、数据、prompt 设置下报告结果。
 
-待补充内容：
+运行指令：
 
-- [ ] 汇总 6 个模型结果
-- [ ] 汇总 single-hop / multi-hop 结果
-- [ ] 引用 When2Tool baseline 表格
-- [ ] 生成最终对比表
-- [ ] 生成最终图
+```text
+python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct
+```
+
+汇总多个模型时，把 `--model-alias` 改成逗号分隔列表或 `all`：
+
+```text
+python code/10_reporting/build_final_report.py --model-alias all
+```
+
+如需清理旧的错误汇总产物后重跑，在同一命令末尾加：
+
+```text
+--clean
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/outputs/final_report/
+|-- model_summary.csv
+|-- neuron_discovery_summary.csv
+|-- training_run_summary.csv
+|-- training_comparison.csv
+|-- causal_validation_summary.csv
+|-- causal_cross_type_summary.csv
+|-- figures/ctd_counts.png
+|-- figures/trained_evaluation.png
+|-- figures/mask_ctd_causal_effect.png
+|-- README_results.md
+|-- manifest.json
+```
+
+做法：
+
+- 只读取阶段 2、5、6、7、8、9 的已生成产物，不重新跑模型。
+- 表格行都包含 `model_alias` 和 `subset`，支持 6 个模型结果合并。
+- `training_comparison.csv` 当前只写本实验新增的 `CTD-Masked-LoRA` 绝对指标；`Default` / `Sparse` / `Reason-then-Act` / `Probe&Prefill` 按 When2Tool 论文表格引用，不在本阶段伪造。
+- 生成 CTD 数量、训练后评测、Mask-CTD 因果效果三张轻量图。
+- 已存在 final report 且 manifest 参数一致时提前跳过。
 
 ## 命名规范
 

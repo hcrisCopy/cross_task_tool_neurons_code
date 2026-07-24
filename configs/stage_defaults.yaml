@@ -22,3 +22,44 @@ single_type_discovery:
   top_k: 5000
   epsilon: 1.0e-8
   min_class_count: 2
+training:
+  rank: 8
+  lora_alpha: 16
+  lora_dropout: 0
+  epochs: 3
+  global_batch_size: 16
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 5.0e-5
+  warmup_ratio: 0.03
+  optimizer: AdamW
+  precision: bf16
+  max_seq_length: 4096
+  trajectory_attempts: 2
+  trajectory_batch_size: 1
+  max_rounds: 10
+  max_new_tokens: 2048
+  max_model_len: 32768
+evaluation:
+  # Official When2Tool run_eval.py defaults to n_runs=3; smoke commands use 1.
+  n_runs: 1
+  batch_size: 1
+  max_rounds: 10
+  max_new_tokens: 2048
+  max_model_len: 32768
+  torch_dtype: bfloat16
+  prompt_mode: current
+  reasoning_mode: no_reasoning
+  enable_thinking: false
+causal_validation:
+  batch_size: 1
+  max_rounds: 10
+  max_new_tokens: 2048
+  max_model_len: 32768
+  torch_dtype: bfloat16
+  interventions:
+    - Base
+    - Mask-Random
+    - Mask-TDN_c
+    - Mask-CTD
+    - Mask-Private_c
