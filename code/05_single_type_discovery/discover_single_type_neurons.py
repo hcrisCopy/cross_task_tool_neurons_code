@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from pathlib import Path
 import sys
@@ -20,6 +21,7 @@ import torch
 from cttn.data import TASK_TYPES
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.progress import progress
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default="auto",
-        help="Device for SCAR tensor statistics: auto, cpu, cuda, or cuda:<index>.",
+        help="Single device for SCAR tensor statistics when --devices is not set: auto, cpu, cuda, or cuda:<index>.",
+    )
+    parser.add_argument(
+        "--devices",
+        default=None,
+        help="Comma-separated devices for module-parallel SCAR statistics, for example cuda:0,cuda:1,...,cuda:7.",
     )
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -50,6 +57,19 @@ def resolve_compute_device(value: str) -> torch.device:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA device requested for Stage 5, but torch.cuda.is_available() is false")
     return device
+
+
+def resolve_compute_devices(args: argparse.Namespace) -> list[torch.device]:
+    if args.devices:
+        devices = [item.strip() for item in args.devices.split(",") if item.strip()]
+        if not devices:
+            raise ValueError("--devices must contain at least one device")
+        resolved = [resolve_compute_device(item) for item in devices]
+        cuda_indices = [dev.index for dev in resolved if dev.type == "cuda"]
+        if len(cuda_indices) != len(set(cuda_indices)):
+            raise ValueError(f"--devices contains duplicate CUDA devices: {args.devices}")
+        return resolved
+    return [resolve_compute_device(args.device)]
 
 
 def zscore(values: torch.Tensor, eps: float) -> torch.Tensor:
@@ -81,6 +101,73 @@ def compute_scar_for_module(x: torch.Tensor, labels: torch.Tensor, eps: float) -
     }
 
 
+def compute_one_module(
+    *,
+    key: str,
+    activations: dict[str, torch.Tensor],
+    idx_tensor: torch.Tensor,
+    labels: torch.Tensor,
+    device: torch.device,
+    eps: float,
+) -> tuple[str, dict[str, torch.Tensor]]:
+    if device.type == "cuda":
+        with torch.cuda.device(device):
+            x = activations[key].index_select(0, idx_tensor).to(device, non_blocking=True)
+            scores = compute_scar_for_module(x, labels.to(device, non_blocking=True), eps)
+            out = {name: tensor.detach().cpu() for name, tensor in scores.items()}
+            del x
+            torch.cuda.empty_cache()
+            return key, out
+    x = activations[key].index_select(0, idx_tensor).to(device)
+    scores = compute_scar_for_module(x, labels.to(device), eps)
+    return key, {name: tensor.detach().cpu() for name, tensor in scores.items()}
+
+
+def compute_scar_for_modules(
+    *,
+    activations: dict[str, torch.Tensor],
+    module_meta: list[dict[str, Any]],
+    idx_tensor: torch.Tensor,
+    labels: torch.Tensor,
+    devices: list[torch.device],
+    eps: float,
+    desc: str,
+) -> dict[str, dict[str, torch.Tensor]]:
+    score_pack: dict[str, dict[str, torch.Tensor]] = {}
+    if len(devices) == 1:
+        device = devices[0]
+        for meta in progress(module_meta, desc=desc):
+            key, scores = compute_one_module(
+                key=meta["key"],
+                activations=activations,
+                idx_tensor=idx_tensor,
+                labels=labels,
+                device=device,
+                eps=eps,
+            )
+            score_pack[key] = scores
+        return score_pack
+
+    with ThreadPoolExecutor(max_workers=len(devices)) as executor:
+        futures = []
+        for pos, meta in enumerate(module_meta):
+            futures.append(
+                executor.submit(
+                    compute_one_module,
+                    key=meta["key"],
+                    activations=activations,
+                    idx_tensor=idx_tensor,
+                    labels=labels,
+                    device=devices[pos % len(devices)],
+                    eps=eps,
+                )
+            )
+        for future in progress(as_completed(futures), total=len(futures), desc=desc):
+            key, scores = future.result()
+            score_pack[key] = scores
+    return score_pack
+
+
 def topk_rows(
     score_pack: dict[str, dict[str, torch.Tensor]],
     module_meta: list[dict[str, Any]],
@@ -110,7 +197,7 @@ def topk_rows(
                     "rank_in_module": rank_in_module,
                 }
             )
-    candidates.sort(key=lambda row: row["score"], reverse=True)
+    candidates.sort(key=lambda row: (-row["score"], row["layer"], row["module"], row["index"]))
     rows = candidates[:k]
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
@@ -202,6 +289,7 @@ def expected_params(
         "epsilon": args.epsilon,
         "min_class_count": args.min_class_count,
         "device": args.device,
+        "devices": args.devices,
         "activation_path": str(activation_path),
         "meta_path": str(meta_path),
         "activation_manifest_params": activation_manifest.get("params", {}),
@@ -246,8 +334,8 @@ def main() -> None:
     subsets = ["single_hop", "multi_hop"] if args.subset == "all" else [args.subset]
     model_out_root = neurons_root / args.model_alias / "single_type_by_subset"
     viz_dir = viz_root / args.model_alias / "single_type_by_subset"
-    compute_device = resolve_compute_device(args.device)
-    print(f"Stage 5 compute device: {compute_device}")
+    compute_devices = resolve_compute_devices(args)
+    print(f"Stage 5 compute devices: {', '.join(str(device) for device in compute_devices)}")
 
     for subset in subsets:
         act_dir = activation_root / args.model_alias / subset / "train"
@@ -284,18 +372,16 @@ def main() -> None:
                 raise ValueError(
                     f"{subset}/type {task_type} needs at least {args.min_class_count} per class, got y1={n1}, y0={n0}"
                 )
-            score_pack: dict[str, dict[str, torch.Tensor]] = {}
             idx_tensor = torch.tensor(indices, dtype=torch.long)
-            for meta in module_meta:
-                key = meta["key"]
-                x = activations[key].index_select(0, idx_tensor).to(compute_device, non_blocking=True)
-                score_pack[key] = {
-                    name: tensor.cpu()
-                    for name, tensor in compute_scar_for_module(x, labels.to(compute_device), args.epsilon).items()
-                }
-                del x
-                if compute_device.type == "cuda":
-                    torch.cuda.empty_cache()
+            score_pack = compute_scar_for_modules(
+                activations=activations,
+                module_meta=module_meta,
+                idx_tensor=idx_tensor,
+                labels=labels,
+                devices=compute_devices,
+                eps=args.epsilon,
+                desc=f"{subset}/type {task_type} SCAR",
+            )
             rows = topk_rows(score_pack, module_meta, args.top_k)
             rows_by_type[task_type] = rows
 

@@ -31,7 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch the official When2Tool repo outside this git repo.")
     parser.add_argument("--repo-dir", default="../when2tool_repo")
     parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--network-turbo", default="", help="Optional path like /etc/network_turbo on the remote server.")
+    parser.add_argument("--network-turbo", default="", help="Optional path to a network acceleration script.")
     parser.add_argument("--pull", action="store_true", help="Pull if repo already exists.")
     args = parser.parse_args()
 

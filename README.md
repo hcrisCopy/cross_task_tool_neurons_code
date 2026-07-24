@@ -5,13 +5,24 @@
 ## 核心约定
 
 - 固定模型标签：`qwen3-1.7b`、`qwen3-4b-instruct`、`qwen3-14b`、`qwen3-32b`、`llama3.1-8b`、`llama3.3-70b`。
+- 下面阶段 2 到阶段 10 的命令都是单机八卡正式实验命令；每次只替换 `--model-alias qwen3-4b-instruct`。
 - 所有路径使用相对路径；数据、模型、激活、checkpoint、图片都写到仓库同级目录，不提交 GitHub。
 - 单跳 `single_hop` 和多跳 `multi_hop` 全程分开；阶段 7 分别训练两个 adapter。
 - 跑标签和构造数据使用 train+test；神经元发现和训练只使用 train；训练后评测和因果验证只使用 test。
 - Qwen 走 XML tool call，Llama 走 native tool calling；prompt、tool schema、parser、state machine 优先复用 When2Tool 官方代码。
 - 正式实验样本数：single-hop train/test = `900/2250`，multi-hop train/test = `180/450`。
-- 正式评测 `--n-runs 3`，smoke/debug 才手动改成 `--n-runs 1` 或减少样本数。
+- 正式评测 `--n-runs 3`；smoke/debug 才手动改成 `--n-runs 1` 或减少样本数。
 - 所有阶段都有参数敏感 manifest；产物存在且 manifest 一致会提前跳过，错误旧产物可在同一命令末尾加 `--clean` 清理重跑。
+
+## 八卡使用方式
+
+- 阶段 2：vLLM `--tensor-parallel-size 8`。
+- 阶段 3：数据合并阶段，不做模型前向，不占 GPU。
+- 阶段 4：小/中模型默认按数据 8 分片并自动合并；`qwen3-32b` 和 `llama3.3-70b` 默认模型并行。
+- 阶段 5：按 FFN module 把 SCAR 统计分发到 `cuda:0` 到 `cuda:7`。
+- 阶段 6：交集和表格阶段，不做模型前向，不占 GPU。
+- 阶段 7/8/9：Python 启动器显式设置 `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`，原阶段脚本使用 `--device-map auto`。这是为了支持自定义 CTD-Masked LoRA 和 activation hook。
+- 阶段 10：结果汇总阶段，不做模型前向，不占 GPU。
 
 ## 目录结构
 
@@ -35,10 +46,8 @@
 ## 准备官方 When2Tool
 
 ```text
-python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo --network-turbo /etc/network_turbo --pull
+python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo --pull
 ```
-
-若网络环境不需要加速，可去掉 `--network-turbo /etc/network_turbo`。
 
 ## 阶段 1：原始数据检查
 
@@ -55,17 +64,17 @@ python code/01_raw_data_preparation/inspect_raw_data.py --overwrite
 用官方 `AgentModel + evaluate_batched` 跑 `hard_no_tool/no_reasoning`。`tool_necessary = 1 - no_tool_correct`，标签只来自当前模型自己的无工具结果。
 
 ```text
-python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --single-train-count 900 --single-test-count 2250 --multi-train-count 180 --multi-test-count 450 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 8 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo ../when2tool_repo --single-train-count 900 --single-test-count 2250 --multi-train-count 180 --multi-test-count 450 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 8 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16
 ```
 
 输出：`../cross_task_tool_neurons_data/labels/<model_alias>/<subset>/<split>/labels.jsonl`
 
 ## 阶段 3：构造模型专属改造数据集
 
-合并原始 instruction/env/tool schema/expected/difficulty 与阶段 2 的模型专属标签，不重新跑模型。
+合并原始 instruction/env/tool schema/expected/difficulty 与阶段 2 的模型专属标签，不重新跑模型。该阶段在八卡机器上运行，但不占 GPU。
 
 ```text
-python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b-instruct
+python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --output-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool
 ```
 
 输出：`../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/<subset>/<split>.jsonl`
@@ -75,7 +84,7 @@ python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b
 正式八卡入口如下。`auto` 对小/中模型使用数据 8 分片并自动合并；对 `qwen3-32b` 和 `llama3.3-70b` 默认使用模型并行 `device_map=auto`。
 
 ```text
-python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32
+python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/activations --when2tool-repo ../when2tool_repo --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0
 ```
 
 输出：`../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/activations.pt`
@@ -84,20 +93,20 @@ python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-inst
 
 ## 阶段 5：A/B/C 单类型神经元发现
 
-只读 train activation。A/B/C 分别计算 `tool_necessary=1` vs `0` 的 SCAR，按全模型 FFN 输出坐标全局取 `top_k=5000`。
+只读 train activation。A/B/C 分别计算 `tool_necessary=1` vs `0` 的 SCAR，按全模型 FFN 输出坐标全局取 `top_k=5000`。该阶段按 FFN module 在 8 张 GPU 上并行计算统计量，SCAR 公式不变。
 
 ```text
-python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --top-k 5000 --heatmap-top-n 300 --min-class-count 2 --device auto
+python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/activations --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --top-k 5000 --heatmap-top-n 300 --epsilon 1.0e-8 --min-class-count 2 --devices cuda:0,cuda:1,cuda:2,cuda:3,cuda:4,cuda:5,cuda:6,cuda:7
 ```
 
 输出：`../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TDN_neurons.jsonl`
 
 ## 阶段 6：跨任务类型共享神经元
 
-按完整身份 `(layer, module, index)` 精确取交集：`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，并输出 pairwise overlap 和热力图。
+按完整身份 `(layer, module, index)` 精确取交集：`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，并输出 pairwise overlap 和热力图。该阶段在八卡机器上运行，但不占 GPU。
 
 ```text
-python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4b-instruct --heatmap-top-n 300
+python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --heatmap-top-n 300
 ```
 
 输出：`../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/CTD_neurons.jsonl`
@@ -107,7 +116,7 @@ python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4
 只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer 轨迹；`tool_necessary=1` 用 `current/no_reasoning` 工具成功且最终答案正确的轨迹。loss 只算 assistant token，LoRA 更新只作用在 CTD mask 为 1 的 FFN 输出坐标。
 
 ```text
-python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto
+python code/11_multigpu/run_training.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --when2tool-repo ../when2tool_repo --subset all --gpus 0,1,2,3,4,5,6,7 --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-grad-norm 1.0 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode full
 ```
 
 输出：`../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/adapter/`
@@ -117,7 +126,7 @@ python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct
 只用 test split，加载阶段 7 adapter，prompt 固定 `current/no_reasoning/enable_thinking=false`，不做 Probe&Prefill。
 
 ```text
-python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto
+python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --when2tool-repo ../when2tool_repo --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 输出：`../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/summary_table.csv`
@@ -127,23 +136,23 @@ python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instr
 只用 test split 和未训练 base 模型。比较 `Base`、`Mask-Random`、`Mask-TDN_c`、`Mask-CTD`、`Mask-Private_c`；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
 
 ```text
-python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto
+python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/neurons --causal-dir ../cross_task_tool_neurons_data/causal_validation --when2tool-repo ../when2tool_repo --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
 ```
 
 输出：`../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/summary_table.csv`
 
 ## 阶段 10：结果汇总
 
-只读已有产物，不重新跑模型。单模型汇总：
+只读已有产物，不重新跑模型。该阶段在八卡机器上运行，但不占 GPU。单模型汇总：
 
 ```text
-python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct
+python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct --labels-dir ../cross_task_tool_neurons_data/labels --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --causal-dir ../cross_task_tool_neurons_data/causal_validation
 ```
 
 六模型全部汇总：
 
 ```text
-python code/10_reporting/build_final_report.py --model-alias all
+python code/10_reporting/build_final_report.py --model-alias all --labels-dir ../cross_task_tool_neurons_data/labels --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --causal-dir ../cross_task_tool_neurons_data/causal_validation
 ```
 
 输出：`../cross_task_tool_neurons_data/outputs/final_report/<model_alias>/` 或 `../cross_task_tool_neurons_data/outputs/final_report/all_models/`
@@ -160,7 +169,7 @@ python code/10_reporting/build_final_report.py --model-alias all
 
 ## 六模型运行顺序
 
-对每个模型依次把上述命令里的 `--model-alias qwen3-4b-instruct` 替换为目标标签运行：
+对每个模型依次把上述阶段 2 到阶段 10 命令里的 `--model-alias qwen3-4b-instruct` 替换为目标标签运行：
 
 ```text
 qwen3-1.7b
