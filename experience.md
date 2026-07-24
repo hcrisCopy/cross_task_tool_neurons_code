@@ -1,6 +1,6 @@
-# Experience Notes
+# Formal Coding Pitfalls
 
-本文记录本次打通 `qwen3-4b-instruct` 流程时踩过的坑。重点不是复述最终方案，而是把容易再次犯错的地方写清楚，方便后续扩展到 6 个模型时直接避开。
+本文用于提醒正式编写和维护代码时要避开的坑。重点不是复述流程记录，而是把容易影响方法一致性、产物隔离、参数可复现性的风险写清楚，方便后续扩展到 6 个模型时直接检查。
 
 ## 1. 不要手写 When2Tool prompt
 
@@ -115,11 +115,11 @@ Stage 8 一开始默认 `n_runs=1`，这是为了快速走通流程。When2Tool 
 
 后来补了：
 
-- README 明确 smoke 用 `--n-runs 1`。
-- 正式实验显式传 `--n-runs 3`。
+- smoke run 必须显式传 `--n-runs 1`，不能把它误当正式默认。
+- 正式实验必须显式传 `--n-runs 3`，并写入 manifest。
 - `n_runs>1` 时 `summary_table.csv` 也写 mean/std 扁平表。
 
-经验：默认值可以服务 smoke，但 README 命令必须把 smoke 和正式实验的区别写清楚。
+经验：代码默认值可以服务 smoke，但正式 pipeline 的参数必须在 parser/config/manifest 里显式可追踪，不能只靠人工记忆。
 
 ## 9. HFGenerationAgent 是必要实现差异
 
@@ -131,7 +131,7 @@ Stage 7-9 没有完全使用官方 vLLM `AgentModel`，而是使用 `HFGeneratio
 
 但 prompt、tool schema、parser、state transition 仍复用 When2Tool 官方代码。
 
-经验：必要实现差异必须写进 README。否则后续对比官方 runtime 时，别人会误以为我们完全复刻了 vLLM 生成栈。
+经验：必要实现差异必须写进代码注释、manifest 或方法文档。否则后续对比官方 runtime 时，别人会误以为我们完全复刻了 vLLM 生成栈。
 
 ## 10. Qwen3 assistant token mask warning
 
@@ -173,16 +173,22 @@ Windows PowerShell -> ssh -> bash -> Python here-doc 的嵌套引号很容易被
 
 经验：环境约束不是形式要求。尤其是大模型项目，本地“顺手跑一下”很容易制造不可解释的环境问题。
 
-## 13. README 要记录能复跑的命令
+## 13. 正式代码参数设置要显式
 
-本次多次出现“代码修了，但 README 命令或产物说明还停在旧逻辑”的风险。最终 `tmpREADME.md` 需要同步写清：
+正式代码不能只依赖“这次命令里刚好传了什么”。凡是会改变产物的方法参数，都要同时满足三件事：
 
-- 每个阶段的输入、输出、命令。
-- smoke 参数和正式参数的区别。
-- 哪些产物会提前跳过。
-- 哪些情况需要 `--clean` 或从某阶段开始重跑。
+- 在 argparse 或配置文件中显式暴露。
+- 写入该阶段 manifest 的 `expected_params`。
+- 被跳过机制比较，参数不一致时要求重跑或显式 `--overwrite/--clean`。
 
-经验：README 不是最后补门面，而是实验可复现性的控制面板。
+尤其注意这些正式实验参数：
+
+- Stage 2 标签生成：`max_rounds=12`，`max_new_tokens=2048`，`max_model_len=32768`，`vllm_dtype`、`record_mode`、`tensor_parallel_size` 都要显式记录。其中 `tensor_parallel_size` 和硬件有关，不应被解释成方法变量。
+- Stage 4 激活抽取：`torch_dtype` 和 `save_dtype` 必须分开。正式神经元发现建议保存 `float32`，`float16` 只适合作为 smoke/debug。
+- Stage 7 训练：`rank`、`lora_alpha`、`lora_dropout`、`epochs`、`batch_size`、`gradient_accumulation_steps`、`learning_rate`、`warmup_ratio`、`max_seq_length`、`trajectory_attempts` 都要进入 manifest。
+- Stage 8/9 评估与干预：正式对齐 When2Tool 时显式使用 `n_runs=3`，smoke 才用 `n_runs=1`。`max_rounds=10`、`max_new_tokens=2048`、`max_model_len=32768` 也要与官方评估口径区分清楚。
+
+经验：正式代码的参数不是“运行时小细节”，而是实验定义的一部分。
 
 ## 14. 最后保留的原则
 
@@ -193,6 +199,5 @@ Windows PowerShell -> ssh -> bash -> Python here-doc 的嵌套引号很容易被
 3. 所有输出路径是否带 `<model_alias>`。
 4. 所有跳过机制是否比较 manifest 参数。
 5. Stage 4 改动后是否重跑 Stage 5-9。
-6. smoke 与正式实验参数是否在命令里显式区分。
-7. 必要实现差异是否写进 `tmpREADME.md`。
-
+6. smoke 与正式实验参数是否在 parser/config/manifest 中显式区分。
+7. 必要实现差异是否写进代码注释、manifest 或方法文档。
