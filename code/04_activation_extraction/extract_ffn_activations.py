@@ -29,8 +29,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--split", choices=["train", "test", "all"], default="all")
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--torch-dtype", default="bfloat16", choices=["float16", "bfloat16", "float32"])
-    parser.add_argument("--save-dtype", default="float16", choices=["float16", "bfloat16", "float32"])
+    parser.add_argument(
+        "--torch-dtype",
+        default="bfloat16",
+        choices=["float16", "bfloat16", "float32"],
+        help="Model forward dtype; bfloat16 matches the remote vLLM/HF setup.",
+    )
+    parser.add_argument(
+        "--save-dtype",
+        default="float32",
+        choices=["float16", "bfloat16", "float32"],
+        help="Activation storage dtype. Default float32 follows When2Tool hidden-state extraction.",
+    )
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--clean", action="store_true")

@@ -1,8 +1,10 @@
 labeling:
   backend: vllm
-  max_rounds: 8
-  max_new_tokens: 512
-  max_model_len: 4096
+  # Aligned with When2Tool src/extract_features.py defaults.
+  max_rounds: 12
+  max_new_tokens: 2048
+  max_model_len: 32768
+  # Hardware-dependent: set to the number of GPUs/tensor-parallel shards available.
   tensor_parallel_size: 1
   vllm_dtype: bfloat16
   record_mode: lite
@@ -10,7 +12,8 @@ activation_extraction:
   batch_size: 1
   torch_dtype: bfloat16
   device_map: auto
-  save_dtype: float16
+  # Official When2Tool stores extracted hidden states as float32.
+  save_dtype: float32
   target_modules:
     - gate_proj
     - up_proj

@@ -166,6 +166,9 @@ single-hop train/test = 100 / 30
 multi-hop train/test = 40 / 30
 prompt = hard_no_tool 标签阶段；current/no_reasoning 激活阶段
 enable_thinking = false
+label max_new_tokens / max_rounds / max_model_len = 2048 / 12 / 32768
+tensor_parallel_size = 硬件相关；单卡设 1，多卡大模型按 GPU 数设置
+activation torch_dtype / save_dtype = bfloat16 / float32
 top_k = 5000
 ```
 
@@ -178,6 +181,8 @@ activation modules: 108 FFN modules = 36 layers * gate/up/down
 single-hop CTD: 49 neurons, pairwise AB/AC/BC = 498/398/108
 multi-hop CTD: 25 neurons, pairwise AB/AC/BC = 278/198/102
 ```
+
+说明：阶段 2 参数已对齐 When2Tool 官方 `src/extract_features.py` 默认值：`max_new_tokens=2048`、`max_rounds=12`、`max_model_len=32768`。`tensor_parallel_size` 是硬件并行参数，不作为实验方法变量；当前 qwen3-4b-instruct 单卡跑通命令使用 `1`。阶段 4 的模型前向 dtype 用 `bfloat16`，激活保存 dtype 用 `float32`；原因是官方特征抽取保存 hidden states 时使用 `.float()`，而本实验后续 SCAR 需要均值/方差统计，默认保存 32 位更稳。
 
 When2Tool 官方仓库不复制进本仓库；运行时放在同级 `../when2tool_repo`，用于导入官方 env、tool schema、prompt、state machine 和 vLLM/HF wrapper。若不存在，先运行：
 
@@ -250,7 +255,7 @@ code/02_labeling/
 运行指令：
 
 ```text
-python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 4096 --max-new-tokens 512 --max-rounds 8
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12
 ```
 
 如需清理旧的错误标签产物后重跑，在同一命令末尾加：
@@ -277,6 +282,8 @@ python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b
 
 - 用官方 When2Tool `AgentModel + evaluate_batched`，`backend=vllm`。
 - 标签阶段固定 `hard_no_tool + no_reasoning + enable_thinking=false`。
+- `--max-model-len 32768 --max-new-tokens 2048 --max-rounds 12` 对齐 When2Tool 官方 `extract_features.py`。
+- `--tensor-parallel-size` 与硬件设施有关：单卡 qwen3-4b-instruct 设 `1`，多卡大模型按实际 GPU 分片数调整。
 - `hard_no_tool` 先使用 no-tool prompt，再在 state machine 里拒绝工具调用。
 - 每个 split 先按 A/B/C 和 difficulty 抽候选样本，再按跑出的 `tool_necessary=0/1` 二次筛选目标数量。
 - `tool_necessary = 1 - no_tool_correct`，只来自该模型 hard no-tool 结果。
@@ -377,7 +384,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/04_activation_extraction/extract_ffn_activations.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --batch-size 1
+python code/04_activation_extraction/extract_ffn_activations.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --batch-size 1 --torch-dtype bfloat16 --save-dtype float32
 ```
 
 如需清理旧的错误激活产物后重跑，在同一命令末尾加：
@@ -405,6 +412,7 @@ python code/04_activation_extraction/extract_ffn_activations.py --model-alias qw
 - 每条样本只暴露自己所属 env 的 tool schema。
 - hook 目标模块为 `mlp.gate_proj`、`mlp.up_proj`、`mlp.down_proj`。
 - 每个样本只保存最后一个输入 token 的 FFN 模块输出坐标，不做 token 平均。
+- `--torch-dtype bfloat16` 控制模型前向；`--save-dtype float32` 控制写入磁盘的 activation dtype，显式对齐 When2Tool `.float()` 特征保存方式。
 - `activations.pt` 保存 `{module_key: tensor[num_samples, dim]}`，`meta.jsonl` 保存 id、A/B/C、label、difficulty。
 
 ## 阶段 5：单类型神经元探测

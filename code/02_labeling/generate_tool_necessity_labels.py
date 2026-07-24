@@ -43,10 +43,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--multi-test-count", type=int, default=30)
 
     parser.add_argument("--backend", default="vllm", choices=["vllm", "hf"])
-    parser.add_argument("--tensor-parallel-size", type=int, default=1)
-    parser.add_argument("--max-model-len", type=int, default=4096)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
-    parser.add_argument("--max-rounds", type=int, default=8)
+    parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        default=1,
+        help=(
+            "Hardware-dependent vLLM tensor parallel size. "
+            "Use 1 on a single GPU; increase only when the model is sharded across multiple GPUs."
+        ),
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=32768,
+        help="Aligned with When2Tool src/extract_features.py default.",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=2048,
+        help="Aligned with When2Tool src/extract_features.py default.",
+    )
+    parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=12,
+        help="Aligned with When2Tool src/extract_features.py default for label extraction.",
+    )
     parser.add_argument("--record-mode", default="lite", choices=["lite", "full", "off"])
     parser.add_argument("--vllm-dtype", default="bfloat16")
     return parser.parse_args()
