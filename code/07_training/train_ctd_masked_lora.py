@@ -307,27 +307,37 @@ def find_subsequence(haystack: list[int], needle: list[int], start: int) -> tupl
     return None
 
 
+def supports_assistant_tokens_mask(tokenizer: Any) -> bool:
+    template = getattr(tokenizer, "chat_template", None)
+    if isinstance(template, dict):
+        text = "\n".join(str(value) for value in template.values())
+    else:
+        text = str(template or "")
+    return "{% generation" in text
+
+
 def tokenize_with_assistant_mask(tokenizer: Any, example: dict[str, Any]) -> tuple[list[int], list[int]]:
     messages = example["messages"]
     tools = example.get("tools", [])
-    try:
-        encoded = apply_chat_template(
-            tokenizer,
-            messages,
-            tools,
-            enable_thinking=False,
-            add_generation_prompt=False,
-            tokenize=True,
-            return_dict=True,
-            return_assistant_tokens_mask=True,
-        )
-        input_ids = list(encoded["input_ids"])
-        mask = encoded.get("assistant_masks") or encoded.get("assistant_tokens_mask")
-        if mask is not None and sum(mask) > 0:
-            labels = [token if int(is_assistant) else -100 for token, is_assistant in zip(input_ids, mask)]
-            return input_ids, labels
-    except Exception:
-        pass
+    if supports_assistant_tokens_mask(tokenizer):
+        try:
+            encoded = apply_chat_template(
+                tokenizer,
+                messages,
+                tools,
+                enable_thinking=False,
+                add_generation_prompt=False,
+                tokenize=True,
+                return_dict=True,
+                return_assistant_tokens_mask=True,
+            )
+            input_ids = list(encoded["input_ids"])
+            mask = encoded.get("assistant_masks") or encoded.get("assistant_tokens_mask")
+            if mask is not None and sum(mask) > 0:
+                labels = [token if int(is_assistant) else -100 for token, is_assistant in zip(input_ids, mask)]
+                return input_ids, labels
+        except Exception:
+            pass
 
     text = apply_chat_template(
         tokenizer,

@@ -672,6 +672,7 @@ python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct
 - `tool_necessary=0` 使用阶段 2 hard-no-tool 答对的 direct answer 作为 assistant target，但放在工具可用 prompt 下训练。
 - `tool_necessary=1` 重新用 base 模型在 `current/no_reasoning` 下走 When2Tool state machine，保留工具调用成功且 final answer 正确的完整工具轨迹。
 - loss 只算 assistant 产生的 token；system/user/tool response token 全部 mask 为 `-100`。
+- assistant token mask 优先使用 tokenizer/chat template 的官方 `return_assistant_tokens_mask`；若模板不含 `{% generation %}`（如当前 Qwen3 模板），脚本会直接用 assistant content 子序列匹配生成 loss mask，避免 Transformers 打出 `return_assistant_tokens_mask` warning。
 - CTD-Masked LoRA 冻结 backbone，只训练 FFN 目标模块旁路 LoRA；LoRA 输出更新乘 `CTD_{m,s}` mask，mask 为 0 的坐标没有 LoRA 更新。
 - 实现差异：阶段 7 为了加载自定义 CTD-Masked LoRA，生成轨迹和训练使用 `HFGenerationAgent` / HF backend；prompt、tool schema、parser 和 state transition 仍复用 When2Tool 官方代码，不使用 Probe&Prefill。
 - 已存在 adapter 且 manifest 参数一致时提前跳过；adapter 不存在但 `training_examples.jsonl` 已存在时复用轨迹继续训练。
