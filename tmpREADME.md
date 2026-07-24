@@ -13,10 +13,10 @@
 - [x] 阶段 4：特征和 FFN 激活提取
 - [x] 阶段 5：A/B/C 单类型神经元探测
 - [x] 阶段 6：跨任务类型共享神经元发现
-- [ ] 阶段 7：CTD-Masked LoRA 训练
-- [ ] 阶段 8：训练后评测
-- [ ] 阶段 9：因果验证
-- [ ] 阶段 10：结果汇总和可视化
+- [x] 阶段 7：CTD-Masked LoRA 训练
+- [x] 阶段 8：训练后评测
+- [x] 阶段 9：因果验证
+- [x] 阶段 10：结果汇总和可视化
 - [ ] 引用 When2Tool baseline 论文表格并整理最终对比表
 
 ## 章节目录
@@ -178,8 +178,11 @@ top_k = 5000
 single-hop labels: train 100 (y=0/1: 51/49), test 30 (y=0/1: 14/16)
 multi-hop labels: train 40 (y=0/1: 21/19), test 30 (y=0/1: 15/15)
 activation modules: 108 FFN modules = 36 layers * gate/up/down
-single-hop CTD: 49 neurons, pairwise AB/AC/BC = 498/398/108
-multi-hop CTD: 25 neurons, pairwise AB/AC/BC = 278/198/102
+single-hop CTD: 44 neurons, pairwise AB/AC/BC = 514/199/119
+multi-hop CTD: 46 neurons, pairwise AB/AC/BC = 278/301/148
+single-hop CTD-Masked-LoRA: train examples 92/100, skipped trajectories 8, updates 18, eval Acc=0.9667, AvgTC=1.0000, ToolAcc=0.5333, Mask-CTD avg ΔAcc=0.0000, avg ΔTCR=-0.0333
+multi-hop CTD-Masked-LoRA: train examples 33/40, skipped trajectories 7, updates 7, eval Acc=0.7333, AvgTC=3.1333, ToolAcc=0.4667, Mask-CTD avg ΔAcc=0.0000, avg ΔTCR=-0.0556
+final report: ../cross_task_tool_neurons_data/outputs/final_report/
 ```
 
 说明：阶段 2 参数已对齐 When2Tool 官方 `src/extract_features.py` 默认值：`max_new_tokens=2048`、`max_rounds=12`、`max_model_len=32768`。`tensor_parallel_size` 是硬件并行参数，不作为实验方法变量；当前 qwen3-4b-instruct 单卡跑通命令使用 `1`。阶段 4 的模型前向 dtype 用 `bfloat16`，激活保存 dtype 用 `float32`；原因是官方特征抽取保存 hidden states 时使用 `.float()`，而本实验后续 SCAR 需要均值/方差统计，默认保存 32 位更稳。
