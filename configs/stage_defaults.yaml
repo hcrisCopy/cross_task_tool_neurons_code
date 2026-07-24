@@ -4,8 +4,8 @@ labeling:
   max_rounds: 12
   max_new_tokens: 2048
   max_model_len: 32768
-  # Hardware-dependent: set to the number of GPUs/tensor-parallel shards available.
-  tensor_parallel_size: 1
+  # Formal eight-GPU experiment default; smoke runs on smaller machines should override this explicitly.
+  tensor_parallel_size: 8
   vllm_dtype: bfloat16
   record_mode: lite
 activation_extraction:
