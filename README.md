@@ -352,7 +352,7 @@ python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct -
 
 方法：只用 test split，不加载 adapter、不做 activation mask。Base 和阶段 8 走同一套 HF/When2Tool 评测路径，随后读取双方 summary 计算 delta。
 
-八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型，主进度条按全局已评测题目数累计。shard 只跑 Base 评测，合并后再统一读取阶段 8 的训练后 summary 计算 `comparison_with_base.csv`，最后打印 Base 指标和 `delta_acc_pp/delta_total_tool_calls_percent/tool_call_reduction_percent/delta_avg_tool_calls/delta_tool_call_rate`。
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型，主进度条按全局已评测题目数累计。shard 只跑 Base 评测，合并后再统一读取阶段 8 的训练后 summary 计算 `comparison_with_base.csv`，最后打印 Base 指标和 `delta_acc_pp/delta_total_tool_calls_percent/tool_call_reduction_percent/delta_avg_tool_calls/delta_tool_call_rate/acc_cost_per_saved_call`。
 
 ## 阶段 10：因果验证
 
@@ -378,7 +378,7 @@ python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct
 
 方法：只用 test split 和未训练 base 模型。比较 `Base`、随机 mask、单类型 TDN mask、共享 CTD mask、私有 TDN mask；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
 
-八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。主进度条按因果验证中的实际题目评测次数累计，也就是 task type 和 intervention 都会计入。随机 mask 固定使用 `--seed 2026` 和同一 CTD 集合，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc_pp/avg_tool_call_reduction_percent/avg_delta_avg_tool_calls/avg_delta_tool_call_rate/var_acc`。
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。主进度条按因果验证中的实际题目评测次数累计，也就是 task type 和 intervention 都会计入。随机 mask 固定使用 `--seed 2026` 和同一 CTD 集合，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc_pp/avg_tool_call_reduction_percent/avg_delta_avg_tool_calls/avg_delta_tool_call_rate/avg_acc_cost_per_saved_call/var_acc`。
 
 ## 阶段 11：结果汇总
 

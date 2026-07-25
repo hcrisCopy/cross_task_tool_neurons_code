@@ -706,7 +706,8 @@ def print_comparison_metrics(subset: str, manifest: dict[str, Any]) -> None:
             f"delta_total_tool_calls_percent={row.get('delta_total_tool_calls_percent', '')}, "
             f"tool_call_reduction_percent={row.get('tool_call_reduction_percent', '')}, "
             f"delta_avg_tool_calls={row.get('delta_avg_tool_calls', '')}, "
-            f"delta_tool_call_rate={row.get('delta_tool_call_rate', '')}"
+            f"delta_tool_call_rate={row.get('delta_tool_call_rate', '')}, "
+            f"acc_cost_per_saved_call={row.get('acc_cost_per_saved_call', '')}"
         )
 
 
@@ -1076,5 +1077,6 @@ def print_causal_metrics(subset: str, rows: list[dict[str, Any]]) -> None:
         f"avg_tool_call_reduction_percent={ctd.get('avg_tool_call_reduction_percent', '')}, "
         f"avg_delta_avg_tool_calls={ctd.get('avg_delta_avg_tool_calls', '')}, "
         f"avg_delta_tool_call_rate={ctd.get('avg_delta_tool_call_rate', ctd.get('avg_delta_tcr', ''))}, "
+        f"avg_acc_cost_per_saved_call={ctd.get('avg_acc_cost_per_saved_call', '')}, "
         f"var_acc={ctd.get('var_acc', '')}"
     )

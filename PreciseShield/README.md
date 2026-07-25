@@ -223,7 +223,7 @@ python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct -
 ../cross_task_tool_neurons_data/precise_shield/outputs/<model_alias>/trained_evaluation/<subset>/comparison_with_base_manifest.json
 ```
 
-做法：Base 不加载 adapter，不做 activation mask。shard 合并后读取 PS-8 和本阶段 summary 计算 delta，结束打印 Base 指标和 `delta_acc_pp/delta_total_tool_calls_percent/tool_call_reduction_percent/delta_avg_tool_calls/delta_tool_call_rate`。
+做法：Base 不加载 adapter，不做 activation mask。shard 合并后读取 PS-8 和本阶段 summary 计算 delta，结束打印 Base 指标和 `delta_acc_pp/delta_total_tool_calls_percent/tool_call_reduction_percent/delta_avg_tool_calls/delta_tool_call_rate/acc_cost_per_saved_call`。
 
 ## PS-10：因果验证
 
@@ -240,7 +240,7 @@ python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct
 ../cross_task_tool_neurons_data/precise_shield/causal_validation/<model_alias>/<subset>/cross_type_summary.csv
 ```
 
-做法：只用 test split 和 base 模型。mask 位置是 `down_proj` 输入 `h`，对选中 intermediate 坐标置零，并作用于所有 token 位置；进度条按题目乘 intervention 累计，结束打印 `Mask-PS-CTD` 的 `avg_delta_acc_pp/avg_tool_call_reduction_percent/avg_delta_avg_tool_calls/avg_delta_tool_call_rate/var_acc`。
+做法：只用 test split 和 base 模型。mask 位置是 `down_proj` 输入 `h`，对选中 intermediate 坐标置零，并作用于所有 token 位置；进度条按题目乘 intervention 累计，结束打印 `Mask-PS-CTD` 的 `avg_delta_acc_pp/avg_tool_call_reduction_percent/avg_delta_avg_tool_calls/avg_delta_tool_call_rate/avg_acc_cost_per_saved_call/var_acc`。
 
 ## PS-11：结果汇总
 
