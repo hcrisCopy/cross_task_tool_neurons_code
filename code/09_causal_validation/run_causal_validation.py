@@ -23,6 +23,7 @@ from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config,
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
+STAGE_NAME = "10_causal_validation"
 INTERVENTIONS = ("Base", "Mask-Random", "Mask-TDN_c", "Mask-CTD", "Mask-Private_c")
 
 
@@ -74,7 +75,7 @@ def expected_params(
     shared_manifest: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "stage": "09_causal_validation",
+        "stage": STAGE_NAME,
         "model_alias": args.model_alias,
         "model_path": str(model_path),
         "subset": subset,
@@ -323,7 +324,7 @@ def main() -> None:
         enable_thinking=False,
     )
     subsets = list(SUBSETS) if args.subset == "all" else [args.subset]
-    root_manifest = {"stage": "09_causal_validation", "model_alias": args.model_alias, "subsets": {}}
+    root_manifest = {"stage": STAGE_NAME, "model_alias": args.model_alias, "subsets": {}}
     try:
         for subset in subsets:
             out_dir = subset_output_dir(causal_root, args.model_alias, subset)

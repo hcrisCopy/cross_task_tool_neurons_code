@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STAGE9_SCRIPT = REPO_ROOT / "code" / "09_causal_validation" / "run_causal_validation.py"
+STAGE10_SCRIPT = REPO_ROOT / "code" / "09_causal_validation" / "run_causal_validation.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,10 +43,10 @@ def split_gpus(value: str) -> list[str]:
     return gpus
 
 
-def build_stage9_cmd(args: argparse.Namespace) -> list[str]:
+def build_stage10_cmd(args: argparse.Namespace) -> list[str]:
     cmd = [
         sys.executable,
-        str(STAGE9_SCRIPT),
+        str(STAGE10_SCRIPT),
         "--model-alias",
         args.model_alias,
         "--when2tool-repo",
@@ -94,7 +94,7 @@ def main() -> None:
     gpus = split_gpus(args.gpus)
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ",".join(gpus)
-    cmd = build_stage9_cmd(args)
+    cmd = build_stage10_cmd(args)
     print("+", " ".join(cmd), f"(CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']})")
     subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, check=True)
 
