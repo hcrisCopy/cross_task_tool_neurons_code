@@ -7,6 +7,7 @@ __pycache__/
 # Local external code checkout. Fetched on demand by Python helper.
 when2tool_repo/
 ../when2tool_repo/
+third_party/when2tool/.git_disabled/
 
 # Data, model weights, checkpoints, and generated artifacts stay outside git.
 cross_task_tool_neurons_data/

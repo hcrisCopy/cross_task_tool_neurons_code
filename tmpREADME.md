@@ -1,4 +1,4 @@
-# Cross-Task Tool-Decision Neurons
+﻿# Cross-Task Tool-Decision Neurons
 
 用于规划和实现跨任务类型工具调用共享神经元实验的代码仓库。
 
@@ -191,11 +191,7 @@ final report: ../cross_task_tool_neurons_data/outputs/final_report/qwen3-4b-inst
 
 2026-07-25 修复说明：阶段 4 已改为复用 When2Tool 官方 `init_state(...)` 构造 `messages/tools`，因此此前基于手工 `system + user` prompt 抽取的正式激活及其下游阶段 5-9 产物只作为历史 smoke 记录保留；严格实验请从阶段 4 开始重跑到阶段 11。阶段 4/5/6 的 manifest 已加入参数敏感跳过，重跑时若检测到旧 manifest 参数不一致会自动覆盖生成。
 
-When2Tool 官方仓库不复制进本仓库；运行时放在同级 `../when2tool_repo`，用于导入官方 env、tool schema、prompt、state machine 和 vLLM/HF wrapper。若不存在，先运行：
-
-```text
-python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo --pull
-```
+When2Tool 官方代码已随本仓库放在 `third_party/when2tool/`，用于导入官方 env、tool schema、prompt、state machine 和 vLLM/HF wrapper。单卡验证时不需要再额外准备外部 When2Tool 目录。
 
 ## 阶段 1：原始数据准备
 
@@ -262,7 +258,7 @@ code/02_labeling/
 运行指令：
 
 ```text
-python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12
 ```
 
 如需清理旧的错误标签产物后重跑，在同一命令末尾加：
@@ -391,7 +387,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/04_activation_extraction/extract_ffn_activations.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --batch-size 1 --torch-dtype bfloat16 --save-dtype float32
+python code/04_activation_extraction/extract_ffn_activations.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --batch-size 1 --torch-dtype bfloat16 --save-dtype float32
 ```
 
 如需清理旧的错误激活产物后重跑，在同一命令末尾加：
@@ -641,7 +637,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
 ```
 
 如需清理旧的错误训练产物后重跑，在同一命令末尾加：
@@ -710,7 +706,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
+python code/08_evaluation/evaluate_trained_model.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 如需清理旧的错误评测产物后重跑，在同一命令末尾加：
@@ -779,7 +775,7 @@ code/08_evaluation/evaluate_base_model.py
 单卡简单验证指令：
 
 ```text
-python code/08_evaluation/evaluate_base_model.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
+python code/08_evaluation/evaluate_base_model.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --n-runs 1 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 如需清理旧的错误 Base 评测产物和 comparison 后重跑，在同一命令末尾加：
@@ -832,7 +828,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo ../when2tool_repo --subset all --max-test-samples 30 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
+python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
 如需清理旧的错误因果验证产物后重跑，在同一命令末尾加：

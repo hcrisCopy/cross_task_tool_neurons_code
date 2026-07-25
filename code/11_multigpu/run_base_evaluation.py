@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--dataset-dir", default=None)
     parser.add_argument("--outputs-dir", default=None)
-    parser.add_argument("--when2tool-repo", default="../when2tool_repo")
+    parser.add_argument("--when2tool-repo", default="third_party/when2tool")
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
     parser.add_argument("--max-test-samples", type=int, default=0)

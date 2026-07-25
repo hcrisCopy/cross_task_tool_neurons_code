@@ -13,8 +13,7 @@ def add_when2tool_repo(repo_dir: str | Path | None = None) -> Path:
     repo = repo.resolve()
     if not (repo / "src" / "utils.py").exists() or not (repo / "envs").exists():
         raise FileNotFoundError(
-            "When2Tool official repo was not found. Run:\n"
-            "python code/00_common/sync_when2tool_repo.py --repo-dir ../when2tool_repo"
+            "When2Tool official repo was not found. Expected bundled path: third_party/when2tool"
         )
     for path in [repo / "src", repo]:
         text = str(path)

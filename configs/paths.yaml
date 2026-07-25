@@ -8,4 +8,4 @@ outputs_dir: ../cross_task_tool_neurons_data/outputs
 visualizations_dir: ../cross_task_tool_neurons_data/visualizations
 checkpoints_dir: ../cross_task_tool_neurons_data/checkpoints
 causal_validation_dir: ../cross_task_tool_neurons_data/causal_validation
-when2tool_repo: ../when2tool_repo
+when2tool_repo: third_party/when2tool
