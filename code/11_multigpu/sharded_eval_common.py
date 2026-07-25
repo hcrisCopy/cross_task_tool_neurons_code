@@ -53,6 +53,7 @@ from cttn.eval_metrics import (
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.seeds import derive_allowed_seed
 
 
 SUBSETS = ("single_hop", "multi_hop")
@@ -793,6 +794,7 @@ def expected_causal_params(
         "device_map": args.device_map,
         "record_mode": args.record_mode,
         "seed": args.seed,
+        "random_mask_seed": derive_allowed_seed(args.seed, subset, "random_mask"),
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,

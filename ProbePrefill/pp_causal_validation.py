@@ -43,6 +43,7 @@ from cttn.agent import HFGenerationAgent
 from cttn.data import TASK_TYPES
 from cttn.eval_metrics import build_per_task, build_summary
 from cttn.lora import sample_random_like
+from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 
 
 INTERVENTIONS = ("Base", "Mask-Random", "Mask-TDN_c", "Mask-CTD", "Mask-Private_c")
@@ -71,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -188,6 +189,7 @@ def run_probe_controls(
         "max_iter": args.max_iter,
         "threshold": args.threshold,
         "seed": args.seed,
+        "random_control_seed": derive_allowed_seed(args.seed, subset, "probe_controls"),
         "activations_dir": str(activations_dir),
         "neurons_dir": str(neurons_dir),
     }
@@ -207,7 +209,7 @@ def run_probe_controls(
         model_alias=args.model_alias,
         subset=subset,
         module_meta=train_payload["module_meta"],
-        seed=args.seed + len(subset),
+        seed=derive_allowed_seed(args.seed, subset, "probe_controls"),
     )
 
     summary_rows = []
@@ -325,6 +327,7 @@ def run_activation_mask_validation(
         "device_map": args.device_map,
         "record_mode": args.record_mode,
         "seed": args.seed,
+        "random_mask_seed": derive_allowed_seed(args.seed, subset, "activation_mask"),
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
@@ -359,7 +362,8 @@ def run_activation_mask_validation(
         enable_thinking=False,
     )
     try:
-        random_rows = sample_random_like(ctd_rows, agent.model, seed=args.seed + len(subset), exclude_rows=ctd_rows)
+        random_seed = derive_allowed_seed(args.seed, subset, "activation_mask")
+        random_rows = sample_random_like(ctd_rows, agent.model, seed=random_seed, exclude_rows=ctd_rows)
         write_jsonl(out_dir / "random_mask_neurons.jsonl", random_rows)
         summary_rows = []
         cross_by_intervention: dict[str, dict[str, Any]] = {}

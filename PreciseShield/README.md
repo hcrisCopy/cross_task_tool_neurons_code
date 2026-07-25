@@ -45,6 +45,7 @@ llama3.3-70b
 
 - 切换模型时只替换命令里的 `--model-alias qwen3-4b-instruct`。
 - 单跳 `single_hop` 和多跳 `multi_hop` 全程分开保存；PS-7 会训练两个 adapter。
+- 随机种子只使用 `2026`、`42`、`123456`；正式命令默认 `2026`，代码内部需要派生随机流时也只从这三个值里选。
 - 阶段 4 抽取 train/test；阶段 5/6 只用 train；阶段 7 只用 train；阶段 8/9/10 只用 test。
 - Prompt、tool schema、parser、state machine 复用 `third_party/when2tool`，固定 `current/no_reasoning/enable_thinking=false`。
 - Qwen 走 XML tool call，Llama 走 native tool calling，规则由公共代码按模型标签识别。
@@ -117,7 +118,7 @@ multi-hop train/test  = 180 / 450
 ## PS-4：抽取 FFN intermediate 激活
 
 ```text
-python PreciseShield/ps_run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0 --sample-strategy first --seed 20260725
+python PreciseShield/ps_run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0 --sample-strategy first --seed 2026
 ```
 
 输出：
@@ -167,7 +168,7 @@ python PreciseShield/ps_discover_shared_neurons.py --model-alias qwen3-4b-instru
 ## PS-7：PreciseShield-Masked-LoRA 训练
 
 ```text
-python PreciseShield/ps_run_training.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-train-samples 0 --sample-strategy first --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-grad-norm 1.0 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode full --seed 20260725
+python PreciseShield/ps_run_training.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-train-samples 0 --sample-strategy first --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-grad-norm 1.0 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode full --seed 2026
 ```
 
 输出：
@@ -191,7 +192,7 @@ W' = W0 + (M * B) A
 ## PS-8：训练后评测
 
 ```text
-python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
+python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：
@@ -209,7 +210,7 @@ python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --data
 ## PS-9：Base 评测与 delta
 
 ```text
-python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
+python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：
@@ -226,7 +227,7 @@ python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct -
 ## PS-10：因果验证
 
 ```text
-python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --causal-dir ../cross_task_tool_neurons_data/precise_shield/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
+python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --causal-dir ../cross_task_tool_neurons_data/precise_shield/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：

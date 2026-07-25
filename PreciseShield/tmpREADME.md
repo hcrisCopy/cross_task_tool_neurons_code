@@ -42,7 +42,7 @@ python code/01_raw_data_preparation/inspect_raw_data.py --overwrite
 ```
 
 ```text
-python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo third_party/when2tool --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo third_party/when2tool --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16 --seed 2026
 ```
 
 ```text
@@ -73,19 +73,19 @@ third_party/when2tool/
 运行：
 
 ```text
-python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset single_hop --split train --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 100 --sample-strategy balanced --seed 20260725 --device-map auto
+python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset single_hop --split train --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 100 --sample-strategy balanced --seed 2026 --device-map auto
 ```
 
 ```text
-python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset single_hop --split test --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 30 --sample-strategy balanced --seed 20260725 --device-map auto
+python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset single_hop --split test --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 30 --sample-strategy balanced --seed 2026 --device-map auto
 ```
 
 ```text
-python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset multi_hop --split train --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 40 --sample-strategy balanced --seed 20260725 --device-map auto
+python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset multi_hop --split train --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 40 --sample-strategy balanced --seed 2026 --device-map auto
 ```
 
 ```text
-python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset multi_hop --split test --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 30 --sample-strategy balanced --seed 20260725 --device-map auto
+python PreciseShield/ps_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset multi_hop --split test --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 30 --sample-strategy balanced --seed 2026 --device-map auto
 ```
 
 输出：
@@ -278,7 +278,7 @@ third_party/when2tool/
 运行：
 
 ```text
-python PreciseShield/ps_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --sample-strategy balanced --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
+python PreciseShield/ps_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --sample-strategy balanced --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：

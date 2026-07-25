@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-dtype", choices=["float16", "bfloat16", "float32"], default="float32")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--sample-strategy", choices=["balanced", "first"], default="balanced")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", type=int, choices=[2026, 42, 123456], default=2026)
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()

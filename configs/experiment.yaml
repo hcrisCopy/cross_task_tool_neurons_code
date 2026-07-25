@@ -1,5 +1,5 @@
 default_model_alias: qwen3-4b-instruct
-seed: 20260725
+seed: 2026
 subsets:
   - single_hop
   - multi_hop

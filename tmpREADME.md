@@ -258,7 +258,7 @@ code/02_labeling/
 运行指令：
 
 ```text
-python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --single-train-count 100 --single-test-count 30 --multi-train-count 40 --multi-test-count 30 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --seed 2026
 ```
 
 如需清理旧的错误标签产物后重跑，在同一命令末尾加：
@@ -638,7 +638,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
+python code/07_training/train_ctd_masked_lora.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-seq-length 4096 --seed 2026 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16
 ```
 
 如需清理旧的错误训练产物后重跑，在同一命令末尾加：

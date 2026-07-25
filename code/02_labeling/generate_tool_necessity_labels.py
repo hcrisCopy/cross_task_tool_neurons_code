@@ -21,6 +21,7 @@ from cttn.data import (
 from cttn.io import write_json, write_jsonl
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -31,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-dataset-dir", default=None)
     parser.add_argument("--labels-dir", default=None)
     parser.add_argument("--when2tool-repo", default=None)
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--candidate-multiplier", type=float, default=2.0)
     parser.add_argument("--require-per-type-labels", action="store_true")
     parser.add_argument("--clean", action="store_true")
@@ -174,6 +175,7 @@ def main() -> None:
         for subset in SUBSETS:
             for split in SPLITS:
                 target = target_count(args, subset, split)
+                candidate_seed = derive_allowed_seed(args.seed, subset, split, "candidates")
                 params = {
                     "stage": "02_labeling",
                     "model_alias": args.model_alias,
@@ -182,6 +184,7 @@ def main() -> None:
                     "split": split,
                     "target_count": target,
                     "seed": args.seed,
+                    "candidate_seed": candidate_seed,
                     "candidate_multiplier": args.candidate_multiplier,
                     "prompt_mode": "hard_no_tool",
                     "reasoning_mode": "no_reasoning",
@@ -203,7 +206,7 @@ def main() -> None:
 
                 all_tasks = load_raw_tasks(raw_dir, subset, split)
                 candidate_count = min(len(all_tasks), max(target, int(math.ceil(target * args.candidate_multiplier))))
-                candidates = balanced_sample_tasks(all_tasks, candidate_count, args.seed + len(subset) + len(split))
+                candidates = balanced_sample_tasks(all_tasks, candidate_count, candidate_seed)
                 for task in candidates:
                     task["model_alias"] = args.model_alias
                 task_by_id = {str(task["id"]): task for task in candidates}

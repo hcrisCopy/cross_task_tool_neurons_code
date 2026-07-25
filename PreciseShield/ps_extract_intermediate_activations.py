@@ -32,6 +32,7 @@ from ps_common import (
 )
 from cttn.paths import ensure_dir, path_from_config
 from cttn.progress import progress
+from cttn.seeds import seed_arg_kwargs
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--sample-strategy", choices=["balanced", "first"], default="balanced")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--num-data-shards", type=int, default=1)
     parser.add_argument("--data-shard-index", type=int, default=0)
     parser.add_argument("--merge-data-shards", action="store_true")
@@ -407,4 +408,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

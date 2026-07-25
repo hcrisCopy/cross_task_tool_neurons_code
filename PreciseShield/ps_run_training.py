@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-seq-length", type=int, default=4096)
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", type=int, choices=[2026, 42, 123456], default=2026)
     parser.add_argument("--trajectory-attempts", type=int, default=2)
     parser.add_argument("--trajectory-batch-size", type=int, default=1)
     parser.add_argument("--max-rounds", type=int, default=10)

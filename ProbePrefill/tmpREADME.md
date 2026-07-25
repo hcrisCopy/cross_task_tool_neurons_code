@@ -55,13 +55,13 @@ ProbePrefill/tmpREADME.md                  # 本文件
 single-hop：
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset single_hop --max-train-samples 100 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 20260725
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset single_hop --max-train-samples 100 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 multi-hop：
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset multi_hop --max-train-samples 40 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 20260725
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset multi_hop --max-train-samples 40 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 输出：
@@ -150,7 +150,7 @@ python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --
 完整小样本命令：
 
 ```text
-python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --threshold 0.5 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
+python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --threshold 0.5 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：

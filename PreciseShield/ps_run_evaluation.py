@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallel-mode", choices=["auto", "model", "subset"], default="auto")
     parser.add_argument("--max-test-samples", type=int, default=0)
     parser.add_argument("--sample-strategy", choices=["balanced", "first"], default="balanced")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", type=int, choices=[2026, 42, 123456], default=2026)
     parser.add_argument("--n-runs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-rounds", type=int, default=10)

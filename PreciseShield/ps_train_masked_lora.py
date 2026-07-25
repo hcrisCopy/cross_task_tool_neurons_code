@@ -21,6 +21,7 @@ from torch.nn import functional as F
 from cttn.agent import HFGenerationAgent
 from cttn.paths import ensure_dir, path_from_config
 from cttn.progress import progress
+from cttn.seeds import seed_arg_kwargs
 from ps_common import (
     STAGE_VERSION,
     apply_chat_template,
@@ -70,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-seq-length", type=int, default=4096)
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)

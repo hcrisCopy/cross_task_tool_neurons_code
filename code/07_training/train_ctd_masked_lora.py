@@ -30,6 +30,7 @@ from cttn.lora import (
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 from cttn.progress import progress
+from cttn.seeds import seed_arg_kwargs
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-seq-length", type=int, default=4096)
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)

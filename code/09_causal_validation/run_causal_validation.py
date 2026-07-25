@@ -21,6 +21,7 @@ from cttn.lora import rows_to_keys, sample_random_like
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
+from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
@@ -91,6 +92,7 @@ def expected_params(
         "device_map": args.device_map,
         "record_mode": args.record_mode,
         "seed": args.seed,
+        "random_mask_seed": derive_allowed_seed(args.seed, subset, "random_mask"),
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
@@ -208,7 +210,8 @@ def run_subset(
         data = data[: args.max_test_samples]
 
     ctd_rows = read_jsonl(shared_dir / "CTD_neurons.jsonl")
-    random_rows = sample_random_like(ctd_rows, agent.model, seed=args.seed + len(subset), exclude_rows=ctd_rows)
+    random_seed = derive_allowed_seed(args.seed, subset, "random_mask")
+    random_rows = sample_random_like(ctd_rows, agent.model, seed=random_seed, exclude_rows=ctd_rows)
     write_jsonl(out_dir / "random_mask_neurons.jsonl", random_rows)
 
     interventions = parse_interventions(args.interventions)

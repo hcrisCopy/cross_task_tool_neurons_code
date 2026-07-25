@@ -21,6 +21,7 @@ from cttn.data import TASK_TYPES
 from cttn.eval_metrics import build_per_task, build_summary, write_csv
 from cttn.paths import ensure_dir, path_from_config
 from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
+from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 from ps_common import (
     STAGE_VERSION,
     dataset_manifest,
@@ -67,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
@@ -131,6 +132,7 @@ def expected_params(
         "device_map": args.device_map,
         "record_mode": args.record_mode,
         "seed": args.seed,
+        "random_mask_seed": derive_allowed_seed(args.seed, subset, "ps_random_mask"),
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
@@ -297,7 +299,7 @@ def run_subset(
     random_rows = sample_random_like_intermediate(
         ctd_rows,
         agent.model,
-        seed=args.seed + len(subset),
+        seed=derive_allowed_seed(args.seed, subset, "ps_random_mask"),
         exclude_rows=ctd_rows,
     )
     write_jsonl(out_dir / "random_mask_neurons.jsonl", random_rows)

@@ -24,6 +24,7 @@ from pp_common import (
     write_json,
     write_jsonl,
 )
+from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-test-samples", type=int, default=0)
     parser.add_argument("--sample-strategy", choices=["balanced", "first"], default="balanced")
     parser.add_argument("--require-per-type-labels", action="store_true")
-    parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -101,7 +102,7 @@ def build_split(
     indices = select_meta_indices(
         meta_rows,
         split_max_samples(args, split),
-        args.seed + (0 if split == "train" else 1009),
+        derive_allowed_seed(args.seed, subset, split, "probe_features"),
         strategy=args.sample_strategy,
         require_per_type_labels=args.require_per_type_labels,
     )
