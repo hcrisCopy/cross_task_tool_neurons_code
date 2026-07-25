@@ -26,6 +26,7 @@
 - [阶段 1：原始数据检查](#阶段-1原始数据检查)
 - [阶段 2：模型专属 tool_necessary 标签](#阶段-2模型专属-tool_necessary-标签)
 - [阶段 3：构造模型专属改造数据集](#阶段-3构造模型专属改造数据集)
+- [PreciseShield 新方案阶段 4-11](#preciseshield-新方案阶段-4-11)
 - [阶段 4：FFN last-token activation 提取](#阶段-4ffn-last-token-activation-提取)
 - [阶段 5：A/B/C 单类型神经元发现](#阶段-5abc-单类型神经元发现)
 - [阶段 6：跨任务类型共享神经元](#阶段-6跨任务类型共享神经元)
@@ -210,6 +211,12 @@ python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b
 ```
 
 方法：把原始 instruction、env、tool schema、expected、difficulty 和阶段 2 的模型专属标签合并成后续统一读取的数据集，不重新跑模型。
+
+## PreciseShield 新方案阶段 4-11
+
+正式的新方案从阶段 4 开始改用 PreciseShield 的 FFN intermediate 神经元定义、探测、Masked-LoRA 训练和因果验证。阶段 1-3 仍按本 README 执行；阶段 3 之后请转到 [`PreciseShield/README.md`](PreciseShield/README.md) 继续跑 PS-4 到 PS-11。
+
+下面保留的是旧方案阶段 4-11 的历史说明，便于追溯原项目，不作为本次 PreciseShield 正式实验入口。
 
 ## 阶段 4：FFN last-token activation 提取
 
