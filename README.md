@@ -246,7 +246,7 @@ python code/05_single_type_discovery/discover_single_type_neurons.py --model-ali
 
 ```text
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TDN_neurons.jsonl
-../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/scores.pt
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/scar_scores.pt
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/summary.json
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/manifest.json
 ```
@@ -289,12 +289,14 @@ python code/11_multigpu/run_training.py --model-alias qwen3-4b-instruct --datase
 ```text
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/adapter/
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/training_examples.jsonl
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/skipped_examples.jsonl
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/trajectory_manifest.json
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/training_log.csv
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/summary.json
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/manifest.json
 ```
 
-方法：只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer，`tool_necessary=1` 用工具调用成功且最终答案正确的轨迹；loss 只算 assistant token，LoRA 只在 CTD mask 对应 FFN 坐标上更新。
+方法：只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer，`tool_necessary=1` 用工具调用成功且最终答案正确的轨迹；轨迹缓存会检查 `trajectory_manifest.json`，数据、prompt 或生成参数变了就自动重建。loss 只算 assistant token，LoRA 只在 CTD mask 对应 FFN 坐标上更新。
 
 ## 阶段 8：训练后评测
 

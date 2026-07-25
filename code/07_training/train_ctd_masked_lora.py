@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import hashlib
+import json
 import math
 from pathlib import Path
 import sys
@@ -72,6 +74,48 @@ def subset_output_dir(checkpoints_root: Path, model_alias: str, subset: str) -> 
     return checkpoints_root / model_alias / "ctd_masked_lora" / subset
 
 
+def stable_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def expected_trajectory_params(
+    args: argparse.Namespace,
+    subset: str,
+    *,
+    model_path: Path,
+    rows: list[dict[str, Any]],
+    dataset_manifest: dict[str, Any],
+    system_prompt: str,
+    tool_format: str,
+) -> dict[str, Any]:
+    return {
+        "stage": "07_training_trajectories",
+        "trajectory_builder_version": 1,
+        "model_alias": args.model_alias,
+        "model_path": str(model_path),
+        "subset": subset,
+        "max_train_samples": args.max_train_samples,
+        "trajectory_attempts": args.trajectory_attempts,
+        "trajectory_batch_size": args.trajectory_batch_size,
+        "max_rounds": args.max_rounds,
+        "max_new_tokens": args.max_new_tokens,
+        "max_model_len": args.max_model_len,
+        "record_mode": args.record_mode,
+        "direct_record_mode": "full",
+        "prompt_mode": "current",
+        "reasoning_mode": "no_reasoning",
+        "enable_thinking": False,
+        "tool_format": tool_format,
+        "system_prompt_sha256": stable_sha256(system_prompt),
+        "train_rows": {
+            "count": len(rows),
+            "sha256": stable_sha256(rows),
+        },
+        "dataset_manifest_params": dataset_manifest.get("params", {}),
+    }
+
+
 def expected_params(
     args: argparse.Namespace,
     subset: str,
@@ -80,6 +124,7 @@ def expected_params(
     dataset_manifest: dict[str, Any],
     shared_manifest: dict[str, Any],
     tool_format: str,
+    trajectory_params: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "stage": "07_training",
@@ -110,6 +155,7 @@ def expected_params(
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
         "tool_format": tool_format,
+        "trajectory_params": trajectory_params,
         "dataset_manifest_params": dataset_manifest.get("params", {}),
         "shared_neuron_manifest_params": shared_manifest.get("params", {}),
     }
@@ -226,13 +272,20 @@ def build_or_load_training_examples(
     w2t_utils: Any,
     system_prompt: str,
     tool_format: str,
+    trajectory_params: dict[str, Any],
     args: argparse.Namespace,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     examples_path = out_dir / "training_examples.jsonl"
     skipped_path = out_dir / "skipped_examples.jsonl"
-    if examples_path.exists() and skipped_path.exists() and not args.overwrite:
-        print(f"Reuse existing training trajectories: {examples_path}")
-        return read_jsonl(examples_path), read_jsonl(skipped_path)
+    manifest_path = out_dir / "trajectory_manifest.json"
+    if examples_path.exists() and skipped_path.exists() and manifest_path.exists() and not args.overwrite:
+        manifest = read_json(manifest_path)
+        if manifest.get("params") == trajectory_params:
+            print(f"Reuse existing training trajectories: {examples_path}")
+            return read_jsonl(examples_path), read_jsonl(skipped_path)
+        print(f"Rebuild training trajectories because manifest changed: {manifest_path}")
+    elif examples_path.exists() and skipped_path.exists() and not args.overwrite:
+        print(f"Rebuild training trajectories because manifest is missing: {manifest_path}")
 
     examples: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -299,18 +352,17 @@ def build_or_load_training_examples(
     skipped.sort(key=lambda row: str(row["id"]))
     write_jsonl(examples_path, examples)
     write_jsonl(skipped_path, skipped)
-    write_json(
-        out_dir / "trajectory_summary.json",
-        {
-            "total_train_rows": len(rows),
-            "training_examples": len(examples),
-            "skipped_examples": len(skipped),
-            "by_tool_necessary": {
-                "0": sum(1 for row in examples if int(row["tool_necessary"]) == 0),
-                "1": sum(1 for row in examples if int(row["tool_necessary"]) == 1),
-            },
+    trajectory_summary = {
+        "total_train_rows": len(rows),
+        "training_examples": len(examples),
+        "skipped_examples": len(skipped),
+        "by_tool_necessary": {
+            "0": sum(1 for row in examples if int(row["tool_necessary"]) == 0),
+            "1": sum(1 for row in examples if int(row["tool_necessary"]) == 1),
         },
-    )
+    }
+    write_json(out_dir / "trajectory_summary.json", trajectory_summary)
+    write_json(out_dir / "trajectory_manifest.json", {"params": trajectory_params, "summary": trajectory_summary})
     return examples, skipped
 
 
@@ -471,27 +523,38 @@ def train_subset(
     shared_manifest_path = shared_root / subset / "manifest.json"
     if not shared_manifest_path.exists():
         raise FileNotFoundError(f"Missing shared neuron manifest for {subset}: {shared_manifest_path}")
+    dataset_manifest = read_json(model_dataset / "manifest.json") if (model_dataset / "manifest.json").exists() else {}
+    rows = read_jsonl(model_dataset / subset / "train.jsonl")
+    if args.max_train_samples > 0:
+        rows = rows[: args.max_train_samples]
+    system_prompt = w2t_utils.get_system_prompt(tool_format)
+    trajectory_params = expected_trajectory_params(
+        args,
+        subset,
+        model_path=model_path,
+        rows=rows,
+        dataset_manifest=dataset_manifest,
+        system_prompt=system_prompt,
+        tool_format=tool_format,
+    )
     params = expected_params(
         args,
         subset,
         model_path=model_path,
-        dataset_manifest=read_json(model_dataset / "manifest.json") if (model_dataset / "manifest.json").exists() else {},
+        dataset_manifest=dataset_manifest,
         shared_manifest=read_json(shared_manifest_path),
         tool_format=tool_format,
+        trajectory_params=trajectory_params,
     )
     if should_skip(out_dir, params, args.overwrite, args.clean):
         return
     ensure_dir(out_dir)
 
-    rows = read_jsonl(model_dataset / subset / "train.jsonl")
-    if args.max_train_samples > 0:
-        rows = rows[: args.max_train_samples]
     ctd_path = shared_root / subset / "CTD_neurons.jsonl"
     ctd_rows = read_jsonl(ctd_path)
     if not ctd_rows:
         raise ValueError(f"No CTD neurons found for {subset}: {ctd_path}")
 
-    system_prompt = w2t_utils.get_system_prompt(tool_format)
     normalizer = w2t_model._normalize_generation_output
 
     agent = HFGenerationAgent(
@@ -513,6 +576,7 @@ def train_subset(
             w2t_utils=w2t_utils,
             system_prompt=system_prompt,
             tool_format=tool_format,
+            trajectory_params=trajectory_params,
             args=args,
         )
         features, skipped_features = build_features(
