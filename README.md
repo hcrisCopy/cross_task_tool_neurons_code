@@ -296,7 +296,7 @@ python code/11_multigpu/run_training.py --model-alias qwen3-4b-instruct --datase
 ../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/manifest.json
 ```
 
-方法：只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer，`tool_necessary=1` 用工具调用成功且最终答案正确的轨迹；轨迹缓存会检查 `trajectory_manifest.json`，数据、prompt 或生成参数变了就自动重建。loss 只算 assistant token，LoRA 只在 CTD mask 对应 FFN 坐标上更新。
+方法：只用 train split，训练目标是 First-Action Decision LoRA。`tool_necessary=0` 用 hard-no-tool direct answer 作为第一步 assistant target；`tool_necessary=1` 用 `current/no_reasoning` 采样到的第一条合法工具调用作为 target，只要求 parser 可解析、工具属于当前 schema、执行 `success=True`，不保留 tool response 和后续 final answer。训练样本缓存会检查 `trajectory_manifest.json`，数据、prompt 或生成参数变了就自动重建。loss 只算第一条 assistant target token，LoRA 只在 CTD mask 对应 FFN 坐标上更新。
 
 ## 阶段 8：训练后评测
 

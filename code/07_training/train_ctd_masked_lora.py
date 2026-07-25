@@ -91,7 +91,8 @@ def expected_trajectory_params(
 ) -> dict[str, Any]:
     return {
         "stage": "07_training_trajectories",
-        "trajectory_builder_version": 1,
+        "trajectory_builder_version": 2,
+        "training_target": "first_action_decision",
         "model_alias": args.model_alias,
         "model_path": str(model_path),
         "subset": subset,
@@ -151,6 +152,7 @@ def expected_params(
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
         "record_mode": args.record_mode,
+        "training_target": "first_action_decision",
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
@@ -178,21 +180,10 @@ def should_skip(out_dir: Path, params: dict[str, Any], overwrite: bool, clean: b
 
 def direct_answer_text(task: dict[str, Any]) -> str:
     meta = task.get("label_metadata", {}) or {}
-    raw = str(meta.get("model_final_raw", "") or "").strip()
-    if "\\boxed{" in raw:
-        return raw
     boxed = str(meta.get("model_final_boxed", "") or meta.get("model_final_cleaned", "") or "").strip()
     if boxed:
         return f"\\boxed{{{boxed}}}"
     return f"\\boxed{{{(task.get('expected', {}) or {}).get('answer', '')}}}"
-
-
-def no_failed_tool_execution(item: dict[str, Any]) -> bool:
-    for trace in item.get("trace", []) or []:
-        tool_result = trace.get("tool_result", None)
-        if isinstance(tool_result, dict) and tool_result.get("success") is False:
-            return False
-    return True
 
 
 def make_direct_example(
@@ -222,12 +213,32 @@ def make_direct_example(
         "difficulty": task.get("difficulty", "unknown"),
         "tool_necessary": int(task["tool_necessary"]),
         "trajectory_source": "hard_no_tool_direct_answer",
+        "training_target": "first_action_decision",
         "messages": messages,
         "tools": state["tools"],
     }
 
 
-def make_tool_example(
+def first_trace_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    trace = item.get("trace", []) or []
+    if not trace:
+        return None
+    first = trace[0]
+    return first if isinstance(first, dict) else None
+
+
+def first_tool_action_success(item: dict[str, Any]) -> bool:
+    first = first_trace_item(item)
+    if first is None:
+        return False
+    parsed = first.get("parsed_output", {}) or {}
+    if parsed.get("type") != "tool":
+        return False
+    tool_result = first.get("tool_result", None)
+    return isinstance(tool_result, dict) and bool(tool_result.get("success"))
+
+
+def make_first_tool_action_example(
     task: dict[str, Any],
     item: dict[str, Any],
     *,
@@ -245,6 +256,15 @@ def make_tool_example(
         tool_format=tool_format,
         tokenizer=tokenizer,
     )
+    first = first_trace_item(item)
+    if first is None:
+        raise ValueError(f"Missing first trace item for task {task['id']}")
+    raw_text = str(first.get("model_raw_output", "") or "")
+    if not raw_text.strip():
+        raise ValueError(f"Missing first tool-call raw text for task {task['id']}")
+    messages = list(state["messages"])
+    messages.append({"role": "assistant", "content": raw_text})
+    parsed = first.get("parsed_output", {}) or {}
     return {
         "id": str(task["id"]),
         "subset": task["subset"],
@@ -252,16 +272,14 @@ def make_tool_example(
         "env_name": task["env_name"],
         "difficulty": task.get("difficulty", "unknown"),
         "tool_necessary": int(task["tool_necessary"]),
-        "trajectory_source": "current_no_reasoning_tool_trajectory",
-        "messages": item.get("output", []),
+        "trajectory_source": "current_no_reasoning_first_tool_action",
+        "training_target": "first_action_decision",
+        "messages": messages,
         "tools": state["tools"],
-        "tool_calls": int(w2t_utils.item_tool_calls(item)),
+        "tool_calls": 1,
+        "first_tool_name": parsed.get("tool_name"),
+        "first_tool_arguments": parsed.get("arguments", {}),
     }
-
-
-def trajectory_success(item: dict[str, Any], w2t_utils: Any) -> bool:
-    _raw, _boxed, _cleaned, correct = w2t_utils.item_final_eval(item)
-    return bool(correct) and int(w2t_utils.item_tool_calls(item)) > 0 and no_failed_tool_execution(item)
 
 
 def build_or_load_training_examples(
@@ -281,11 +299,11 @@ def build_or_load_training_examples(
     if examples_path.exists() and skipped_path.exists() and manifest_path.exists() and not args.overwrite:
         manifest = read_json(manifest_path)
         if manifest.get("params") == trajectory_params:
-            print(f"Reuse existing training trajectories: {examples_path}")
+            print(f"Reuse existing first-action training examples: {examples_path}")
             return read_jsonl(examples_path), read_jsonl(skipped_path)
-        print(f"Rebuild training trajectories because manifest changed: {manifest_path}")
+        print(f"Rebuild first-action training examples because manifest changed: {manifest_path}")
     elif examples_path.exists() and skipped_path.exists() and not args.overwrite:
-        print(f"Rebuild training trajectories because manifest is missing: {manifest_path}")
+        print(f"Rebuild first-action training examples because manifest is missing: {manifest_path}")
 
     examples: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -309,7 +327,7 @@ def build_or_load_training_examples(
         if not pending:
             break
         batch = list(pending.values())
-        print(f"Generating tool trajectories: attempt {attempt}, pending={len(batch)}")
+        print(f"Generating first tool actions: attempt {attempt}, pending={len(batch)}")
         outputs = w2t_utils.evaluate_batched(
             batch,
             agent,
@@ -324,9 +342,9 @@ def build_or_load_training_examples(
             task = pending.get(task_id)
             if task is None:
                 continue
-            if trajectory_success(item, w2t_utils) and item.get("output"):
+            if first_tool_action_success(item):
                 examples.append(
-                    make_tool_example(
+                    make_first_tool_action_example(
                         task,
                         item,
                         w2t_utils=w2t_utils,
@@ -338,10 +356,15 @@ def build_or_load_training_examples(
                 pending.pop(task_id, None)
             elif attempt == args.trajectory_attempts:
                 _raw, boxed, cleaned, correct = w2t_utils.item_final_eval(item)
+                first = first_trace_item(item)
+                parsed = (first or {}).get("parsed_output", {}) or {}
                 skipped.append(
                     {
                         "id": task_id,
-                        "reason": "tool_trajectory_failed",
+                        "reason": "first_tool_action_failed",
+                        "first_output_type": parsed.get("type"),
+                        "first_tool_name": parsed.get("tool_name"),
+                        "first_tool_result": (first or {}).get("tool_result"),
                         "tool_calls": int(w2t_utils.item_tool_calls(item)),
                         "final_correct": int(bool(correct)),
                         "model_boxed_content": boxed,
@@ -353,6 +376,7 @@ def build_or_load_training_examples(
     write_jsonl(examples_path, examples)
     write_jsonl(skipped_path, skipped)
     trajectory_summary = {
+        "training_target": "first_action_decision",
         "total_train_rows": len(rows),
         "training_examples": len(examples),
         "skipped_examples": len(skipped),
