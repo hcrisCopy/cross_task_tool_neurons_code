@@ -159,133 +159,243 @@ modelscope download --model LLM-Research/Llama-3.3-70B-Instruct --local_dir ../m
 
 ## 阶段 1：原始数据检查
 
-检查 When2Tool 原始 parquet 的 split、样本数、env、difficulty 和 A/B/C 映射，不改写数据。
+指令：
 
 ```text
 python code/01_raw_data_preparation/inspect_raw_data.py --overwrite
 ```
 
+涉及文件：`code/01_raw_data_preparation/inspect_raw_data.py`，`configs/paths.yaml`，`../cross_task_tool_neurons_data/datasets/raw_when2tool/`
+
 输出：`../cross_task_tool_neurons_data/datasets/raw_when2tool/manifest.json`
+
+方法：只检查原始 When2Tool parquet 的 split、样本数、env、difficulty 和 A/B/C 映射，不改写数据。
 
 ## 阶段 2：模型专属 tool_necessary 标签
 
-用官方 `AgentModel + evaluate_batched` 跑 `hard_no_tool/no_reasoning`。`tool_necessary = 1 - no_tool_correct`，标签只来自当前模型自己的无工具结果。
+指令：
 
 ```text
 python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo third_party/when2tool --single-train-count 900 --single-test-count 2250 --multi-train-count 180 --multi-test-count 450 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 8 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16
 ```
 
-输出：`../cross_task_tool_neurons_data/labels/<model_alias>/<subset>/<split>/labels.jsonl`
+涉及文件：`code/02_labeling/generate_tool_necessity_labels.py`，`code/00_common/`，`configs/models.yaml`，`third_party/when2tool/`，原始数据目录。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/labels/<model_alias>/<subset>/<split>/labels.jsonl
+../cross_task_tool_neurons_data/labels/<model_alias>/<subset>/<split>/summary.json
+../cross_task_tool_neurons_data/labels/<model_alias>/<subset>/<split>/manifest.json
+```
+
+方法：用官方 When2Tool 的 `AgentModel + evaluate_batched` 跑 `hard_no_tool/no_reasoning`。若当前模型无工具答对，则 `tool_necessary=0`；无工具答错，则 `tool_necessary=1`。
 
 ## 阶段 3：构造模型专属改造数据集
 
-合并原始 instruction/env/tool schema/expected/difficulty 与阶段 2 的模型专属标签，不重新跑模型。该阶段在八卡机器上运行，但不占 GPU。
+指令：
 
 ```text
 python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --output-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool
 ```
 
-输出：`../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/<subset>/<split>.jsonl`
+涉及文件：`code/03_dataset_building/build_modified_dataset.py`，原始数据目录，阶段 2 标签目录。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/<subset>/<split>.jsonl
+../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/<subset>/<split>_summary.json
+../cross_task_tool_neurons_data/datasets/modified_when2tool/<model_alias>/manifest.json
+```
+
+方法：把原始 instruction、env、tool schema、expected、difficulty 和阶段 2 的模型专属标签合并成后续统一读取的数据集，不重新跑模型。
 
 ## 阶段 4：FFN last-token activation 提取
 
-`auto` 对小/中模型使用数据 8 分片并自动合并；对 `qwen3-32b` 和 `llama3.3-70b` 默认使用模型并行 `device_map=auto`。
+指令：
 
 ```text
 python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0
 ```
 
-输出：`../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/activations.pt`
+涉及文件：`code/11_multigpu/run_activation_extraction.py`，`code/04_activation_extraction/extract_ffn_activations.py`，改造后数据集，`configs/models.yaml`，`third_party/when2tool/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/activations.pt
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/meta.jsonl
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/summary.json
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/manifest.json
+```
+
+方法：用 When2Tool 官方 `init_state` 构造 prompt，hook 每层 FFN 的 gate/up/down 输出，保存最后一个有效 token 的 activation。`auto` 对小/中模型按数据分 8 份，对大模型用 `device_map=auto`。
 
 ## 阶段 5：A/B/C 单类型神经元发现
 
-只读 train activation。A/B/C 分别计算 `tool_necessary=1` vs `0` 的 SCAR，按全模型 FFN 输出坐标全局取 `top_k=5000`。
+指令：
 
 ```text
 python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/activations --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --top-k 5000 --heatmap-top-n 300 --epsilon 1.0e-8 --min-class-count 2 --devices cuda:0,cuda:1,cuda:2,cuda:3,cuda:4,cuda:5,cuda:6,cuda:7
 ```
 
-输出：`../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TDN_neurons.jsonl`
+涉及文件：`code/05_single_type_discovery/discover_single_type_neurons.py`，阶段 4 的 train activation，`../cross_task_tool_neurons_data/visualizations/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TDN_neurons.jsonl
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/scores.pt
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/summary.json
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/manifest.json
+```
+
+方法：只读 train activation。A/B/C 各自把 `tool_necessary=1` 和 `0` 分成两组，按 SCAR 分数在全模型 FFN 坐标里取 `top_k=5000`。
 
 ## 阶段 6：跨任务类型共享神经元
 
-按完整身份 `(layer, module, index)` 精确取交集：`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，并输出 pairwise overlap 和热力图。
+指令：
 
 ```text
 python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --heatmap-top-n 300
 ```
 
-输出：`../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/CTD_neurons.jsonl`
+涉及文件：`code/06_shared_discovery/discover_shared_neurons.py`，阶段 5 的 A/B/C `TDN_neurons.jsonl`，`../cross_task_tool_neurons_data/visualizations/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/CTD_neurons.jsonl
+../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/pairwise_<AB|AC|BC>_neurons.jsonl
+../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
+../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
+```
+
+方法：按完整身份 `(layer, module, index)` 精确取交集，`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，同时记录两两重叠和可视化。
 
 ## 阶段 7：CTD-Masked LoRA 训练
 
-只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer 轨迹；`tool_necessary=1` 用 `current/no_reasoning` 工具成功且最终答案正确的轨迹。loss 只算 assistant token，LoRA 更新只作用在 CTD mask 为 1 的 FFN 输出坐标。
+指令：
 
 ```text
 python code/11_multigpu/run_training.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-train-samples 0 --rank 8 --lora-alpha 16 --lora-dropout 0 --epochs 3 --per-device-batch-size 1 --gradient-accumulation-steps 16 --learning-rate 5e-5 --warmup-ratio 0.03 --max-grad-norm 1.0 --max-seq-length 4096 --trajectory-attempts 2 --trajectory-batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode full
 ```
 
-输出：`../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/adapter/`
+涉及文件：`code/11_multigpu/run_training.py`，`code/07_training/train_ctd_masked_lora.py`，改造后 train 数据，阶段 6 `CTD_neurons.jsonl`，`third_party/when2tool/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/adapter/
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/training_examples.jsonl
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/training_log.csv
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/summary.json
+../cross_task_tool_neurons_data/checkpoints/<model_alias>/ctd_masked_lora/<subset>/manifest.json
+```
+
+方法：只用 train split。`tool_necessary=0` 用 hard-no-tool direct answer，`tool_necessary=1` 用工具调用成功且最终答案正确的轨迹；loss 只算 assistant token，LoRA 只在 CTD mask 对应 FFN 坐标上更新。
 
 ## 阶段 8：训练后评测
 
-只用 test split，加载阶段 7 adapter，prompt 固定 `current/no_reasoning/enable_thinking=false`，不做 Probe&Prefill。本阶段只输出 `CTD-Masked-LoRA` 绝对指标；相对 Base 的 delta 在阶段 9 统一计算。
+指令：
 
 ```text
 python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
-输出：`../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/summary_table.csv`
+涉及文件：`code/11_multigpu/run_evaluation.py`，`code/08_evaluation/evaluate_trained_model.py`，改造后 test 数据，阶段 7 adapter，`third_party/when2tool/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/outputs.json
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/per_task.jsonl
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/summary.json
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/summary_table.csv
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/manifest.json
+```
+
+方法：只用 test split，加载阶段 7 adapter，prompt 固定 `current/no_reasoning/enable_thinking=false`。本阶段只产出 `CTD-Masked-LoRA` 绝对指标，和 Base 的 delta 放到阶段 9 统一算。
 
 ## 阶段 9：Base 模型评测与 delta 计算
 
-只用 test split，不加载 adapter，不做 activation mask，不做 Probe&Prefill。该阶段使用和阶段 8 相同的 HF/When2Tool 评测路径，避免 Base vs CTD-Masked-LoRA 的 delta 混入生成后端差异。
+指令：
 
 ```text
 python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
+涉及文件：`code/11_multigpu/run_base_evaluation.py`，`code/08_evaluation/evaluate_base_model.py`，改造后 test 数据，阶段 8 训练后评测产物，`third_party/when2tool/`。
+
 输出：
 
 ```text
 ../cross_task_tool_neurons_data/outputs/<model_alias>/base_evaluation/<subset>/summary_table.csv
+../cross_task_tool_neurons_data/outputs/<model_alias>/base_evaluation/<subset>/summary.json
+../cross_task_tool_neurons_data/outputs/<model_alias>/base_evaluation/<subset>/manifest.json
 ../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/comparison_with_base.csv
+../cross_task_tool_neurons_data/outputs/<model_alias>/trained_evaluation/<subset>/comparison_with_base_manifest.json
 ```
+
+方法：只用 test split，不加载 adapter、不做 activation mask。Base 和阶段 8 走同一套 HF/When2Tool 评测路径，随后读取双方 summary 计算 delta。
 
 ## 阶段 10：因果验证
 
-只用 test split 和未训练 base 模型。比较 `Base`、`Mask-Random`、`Mask-TDN_c`、`Mask-CTD`、`Mask-Private_c`；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
+指令：
 
 ```text
 python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/neurons --causal-dir ../cross_task_tool_neurons_data/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
 ```
 
-输出：`../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/summary_table.csv`
+涉及文件：`code/11_multigpu/run_causal_validation.py`，`code/09_causal_validation/run_causal_validation.py`，改造后 test 数据，阶段 5/6 神经元，`third_party/when2tool/`。
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/random_mask_neurons.jsonl
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<intervention>/outputs.json
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<intervention>/summary.json
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/summary_table.csv
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/cross_type_summary.csv
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/manifest.json
+```
+
+方法：只用 test split 和未训练 base 模型。比较 `Base`、随机 mask、单类型 TDN mask、共享 CTD mask、私有 TDN mask；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
 
 ## 阶段 11：结果汇总
 
-只读已有产物，不重新跑模型。单模型汇总：
+单模型汇总指令：
 
 ```text
 python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct --labels-dir ../cross_task_tool_neurons_data/labels --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --causal-dir ../cross_task_tool_neurons_data/causal_validation
 ```
 
-六模型全部汇总：
+六模型全部汇总指令：
 
 ```text
 python code/10_reporting/build_final_report.py --model-alias all --labels-dir ../cross_task_tool_neurons_data/labels --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --causal-dir ../cross_task_tool_neurons_data/causal_validation
 ```
 
-关键表格：
+涉及文件：`code/10_reporting/build_final_report.py`，阶段 2/5/6/7/8/9/10 的 manifest、summary 和 csv 产物。
+
+输出：
 
 ```text
-base_evaluation_summary.csv
-trained_evaluation_summary.csv
-training_comparison.csv
-causal_validation_summary.csv
-causal_cross_type_summary.csv
-model_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/README_results.md
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/neuron_discovery_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/training_run_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/base_evaluation_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/trained_evaluation_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/training_comparison.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/causal_validation_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/causal_cross_type_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/model_summary.csv
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/figures/*.png
+../cross_task_tool_neurons_data/outputs/final_report/<model_alias_or_all>/manifest.json
 ```
+
+方法：只读已有产物，不重新跑模型。把六模型的神经元数量、训练情况、Base/训练后评测、因果验证和 delta 汇总成表格与图。
 
 ## 清理旧错误产物
 
