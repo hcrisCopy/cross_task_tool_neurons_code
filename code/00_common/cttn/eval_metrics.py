@@ -349,6 +349,11 @@ def build_comparison_with_base(
             row["delta_acc_pp"] = 100.0 * delta_acc
         if delta_avg_tc is not None:
             row["delta_avg_tool_calls"] = delta_avg_tc
+            row["delta_acc_per_delta_avg_tool_call"] = (
+                (100.0 * delta_acc) / delta_avg_tc
+                if delta_acc is not None and abs(delta_avg_tc) > eps
+                else ""
+            )
             row["acc_cost_per_saved_call"] = (
                 (100.0 * delta_acc) / (-delta_avg_tc)
                 if delta_acc is not None and delta_avg_tc < 0

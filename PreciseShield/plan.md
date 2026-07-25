@@ -300,6 +300,9 @@ Tool Call Reduction (%) = - Delta Total Tool Calls (%)
 
 Acc Cost Per Saved Call =
 Delta Acc (pp) / (-Delta Avg Tool Calls), when Delta Avg Tool Calls < 0
+
+Delta Acc Per Delta Avg Tool Call =
+Delta Acc (pp) / Delta Avg Tool Calls, when Delta Avg Tool Calls != 0
 ```
 
 对应 `comparison_with_base.csv` 中的列名：
@@ -309,9 +312,10 @@ Delta Acc (pp) / (-Delta Avg Tool Calls), when Delta Avg Tool Calls < 0
 - `delta_tool_call_rate`
 - `delta_total_tool_calls_percent`
 - `tool_call_reduction_percent`
+- `delta_acc_per_delta_avg_tool_call`
 - `acc_cost_per_saved_call`
 
-这些是和 When2Tool 论文最直接对齐的主报告指标。`delta_acc_pp` 为负时表示准确率损失；`tool_call_reduction_percent` 为正时表示节省工具调用。
+这些是和 When2Tool 论文最直接对齐的主报告指标。`delta_acc_pp`、`delta_avg_tool_calls`、`delta_tool_call_rate` 和 `delta_acc_per_delta_avg_tool_call` 都允许正负；`tool_call_reduction_percent` 为正时表示节省工具调用。`acc_cost_per_saved_call` 只是旧项目兼容列，只在工具调用减少时有直观解释。
 
 本实验额外保留工具决策二分类指标：
 
@@ -372,6 +376,20 @@ Mask-PS-Private_c
 - `Mask-PS-TDN_c` 应主要影响对应类型。
 - `Mask-Random` 应弱于同规模 PS-CTD。
 - `Mask-PS-Private_c` 可帮助区分共享和私有机制。
+
+因果验证也输出 When2Tool 风格 trade-off delta。`summary_table.csv` 按每个 `task_type + intervention` 写出：
+
+```text
+delta_acc_pp
+delta_avg_tool_calls
+delta_tool_call_rate
+delta_total_tool_calls_percent
+tool_call_reduction_percent
+delta_acc_per_delta_avg_tool_call
+acc_cost_per_saved_call
+```
+
+其中 `delta_acc_per_delta_avg_tool_call` 正负都允许，用来贴近 When2Tool 的 accuracy-tool calls trade-off；`acc_cost_per_saved_call` 仅作为“省调用时的准确率代价”辅助列。
 
 ## 10. 跳过与清理
 
