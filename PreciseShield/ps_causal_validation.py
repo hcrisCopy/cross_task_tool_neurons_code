@@ -20,6 +20,7 @@ from cttn.agent import HFGenerationAgent
 from cttn.data import TASK_TYPES
 from cttn.eval_metrics import build_per_task, build_summary, write_csv
 from cttn.paths import ensure_dir, path_from_config
+from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
 from ps_common import (
     STAGE_VERSION,
     dataset_manifest,
@@ -67,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
     parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
 
@@ -189,11 +191,17 @@ def evaluate_intervention(
     w2t_utils: Any,
     tool_format: str,
     args: argparse.Namespace,
+    tracker: ProgressTracker | None = None,
+    desc: str = "PS causal tasks",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     with ps_activation_mask(agent.model, mask_rows):
-        outputs = w2t_utils.evaluate_batched(
+        outputs = evaluate_batched_with_task_progress(
+            w2t_utils,
             tasks,
             agent,
+            batch_size=args.batch_size,
+            desc=desc,
+            tracker=tracker,
             max_rounds=args.max_rounds,
             record_mode=args.record_mode,
             prompt_mode="current",
@@ -296,8 +304,13 @@ def run_subset(
     interventions = parse_interventions(args.interventions)
     summary_rows = []
     cross_by_intervention: dict[str, dict[str, Any]] = {}
+    progress_total = sum(
+        len([row for row in rows if row.get("task_type") == task_type]) * len(interventions)
+        for task_type in TASK_TYPES
+    )
+    tracker = ProgressTracker(args.progress_file, total=progress_total) if args.progress_file else None
 
-    for task_type in TASK_TYPES:
+    for task_type in progress(TASK_TYPES, desc=f"{subset} PS causal task types", unit="type"):
         task_rows = [row for row in rows if row.get("task_type") == task_type]
         if not task_rows:
             continue
@@ -322,6 +335,8 @@ def run_subset(
                 w2t_utils=w2t_utils,
                 tool_format=tool_format,
                 args=args,
+                tracker=tracker,
+                desc=f"{subset}/{task_type}/{intervention} tasks",
             )
             write_json(case_dir / "outputs.json", outputs)
             write_jsonl(case_dir / "per_task.jsonl", per_task)

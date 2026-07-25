@@ -18,7 +18,7 @@ from cttn.eval_metrics import aggregate_run_summaries, build_per_task, build_sum
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
-from cttn.progress import progress
+from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
+    parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
 
@@ -152,11 +153,16 @@ def evaluate_subset(
         run_outputs: dict[str, list[dict[str, Any]]] = {}
         run_summaries: dict[str, dict[str, Any]] = {}
         all_per_task = []
+        tracker = ProgressTracker(args.progress_file, total=len(data) * args.n_runs) if args.progress_file else None
         for run_id in progress(range(args.n_runs), desc=f"{subset} CTD-Masked-LoRA runs", unit="run"):
             print(f"{subset}: CTD-Masked-LoRA evaluation run {run_id + 1}/{args.n_runs}")
-            outputs = w2t_utils.evaluate_batched(
+            outputs = evaluate_batched_with_task_progress(
+                w2t_utils,
                 data,
                 agent,
+                batch_size=args.batch_size,
+                desc=f"{subset} run {run_id + 1}/{args.n_runs} tasks",
+                tracker=tracker,
                 max_rounds=args.max_rounds,
                 record_mode=args.record_mode,
                 prompt_mode="current",

@@ -20,7 +20,7 @@ from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.lora import rows_to_keys, sample_random_like
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
-from cttn.progress import progress
+from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
     parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
 
@@ -148,11 +149,17 @@ def evaluate_intervention(
     w2t_utils: Any,
     tool_format: str,
     args: argparse.Namespace,
+    tracker: ProgressTracker | None = None,
+    desc: str = "causal tasks",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     with agent.activation_mask(rows):
-        outputs = w2t_utils.evaluate_batched(
+        outputs = evaluate_batched_with_task_progress(
+            w2t_utils,
             tasks,
             agent,
+            batch_size=args.batch_size,
+            desc=desc,
+            tracker=tracker,
             max_rounds=args.max_rounds,
             record_mode=args.record_mode,
             prompt_mode="current",
@@ -207,6 +214,11 @@ def run_subset(
     interventions = parse_interventions(args.interventions)
     summary_rows = []
     cross_by_intervention: dict[str, dict[str, Any]] = {}
+    progress_total = sum(
+        len([row for row in data if row.get("task_type") == task_type]) * len(interventions)
+        for task_type in TASK_TYPES
+    )
+    tracker = ProgressTracker(args.progress_file, total=progress_total) if args.progress_file else None
 
     for task_type in progress(TASK_TYPES, desc=f"{subset} causal task types", unit="type"):
         task_rows = [row for row in data if row.get("task_type") == task_type]
@@ -233,6 +245,8 @@ def run_subset(
                 w2t_utils=w2t_utils,
                 tool_format=tool_format,
                 args=args,
+                tracker=tracker,
+                desc=f"{subset}/{task_type}/{intervention} tasks",
             )
             per_task = build_per_task(outputs, w2t_utils)
             write_json(case_dir / "outputs.json", outputs)

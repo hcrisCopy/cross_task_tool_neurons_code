@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import statistics
 import subprocess
@@ -138,10 +139,29 @@ def tail_text(path: Path, lines: int = 80) -> str:
     return "\n".join(content[-lines:])
 
 
+def read_progress_file(path: Path) -> tuple[int, int] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    done = int(payload.get("done", 0) or 0)
+    total = int(payload.get("total", 0) or 0)
+    return done, total
+
+
 def run_process_group(jobs: list[dict[str, Any]], *, desc: str, repo_root: Path) -> None:
     if not jobs:
         print(f"{desc}: no non-empty shards to run.")
         return
+    use_task_progress = all("progress_path" in job and "progress_total" in job for job in jobs)
+    progress_total = (
+        sum(int(job.get("progress_total", 0) or 0) for job in jobs)
+        if use_task_progress
+        else len(jobs)
+    )
+    progress_unit = "task" if use_task_progress else "shard"
     processes = []
     log_files = []
     for job in jobs:
@@ -166,9 +186,20 @@ def run_process_group(jobs: list[dict[str, Any]], *, desc: str, repo_root: Path)
         log_files.append(log_file)
 
     completed: set[int] = set()
+    last_done_by_job = {idx: 0 for idx in range(len(processes))}
     try:
-        with tqdm(total=len(processes), desc=desc, dynamic_ncols=True, unit="shard") as bar:
+        with tqdm(total=progress_total, desc=desc, dynamic_ncols=True, unit=progress_unit) as bar:
             while len(completed) < len(processes):
+                if use_task_progress:
+                    for idx, (job, _proc) in enumerate(processes):
+                        progress = read_progress_file(Path(job["progress_path"]))
+                        if progress is None:
+                            continue
+                        done, total = progress
+                        done = min(done, total)
+                        if done > last_done_by_job[idx]:
+                            bar.update(done - last_done_by_job[idx])
+                            last_done_by_job[idx] = done
                 for idx, (job, proc) in enumerate(processes):
                     if idx in completed:
                         continue
@@ -177,7 +208,16 @@ def run_process_group(jobs: list[dict[str, Any]], *, desc: str, repo_root: Path)
                         continue
                     completed.add(idx)
                     log_files[idx].close()
-                    bar.update(1)
+                    if use_task_progress:
+                        progress = read_progress_file(Path(job["progress_path"]))
+                        done = progress[0] if progress else 0
+                        total = int(job.get("progress_total", 0) or 0)
+                        done = max(done, last_done_by_job[idx])
+                        if ret == 0 and done < total:
+                            bar.update(total - done)
+                            last_done_by_job[idx] = total
+                    else:
+                        bar.update(1)
                     bar.set_postfix_str(f"last=shard{job['shard_index']} rc={ret}")
                     if ret != 0:
                         for other_idx, (_other_job, other_proc) in enumerate(processes):
@@ -419,6 +459,7 @@ def prepare_shards(
                 "dataset_root": shard_dataset_root,
                 "output_root": work_dir / "outputs" / f"shard_{shard_index:02d}",
                 "log_path": work_dir / "logs" / f"shard_{shard_index:02d}.log",
+                "progress_path": work_dir / "progress" / f"shard_{shard_index:02d}.json",
             }
         )
     return shard_infos
@@ -516,9 +557,11 @@ def run_trained_subset_dp(args: argparse.Namespace, *, script_path: Path, repo_r
                 str(checkpoints_root),
                 "--outputs-dir",
                 str(info["output_root"]),
+                "--progress-file",
+                str(info["progress_path"]),
             ]
         )
-        jobs.append({**info, "cmd": cmd})
+        jobs.append({**info, "cmd": cmd, "progress_total": len(info["rows"]) * args.n_runs})
     print(f"[Stage 8] {subset}: {len(data_rows)} test rows -> {len(jobs)} GPU shards")
     run_process_group(jobs, desc=f"Stage 8 {subset}", repo_root=repo_root)
     shard_dirs = [info["output_root"] / args.model_alias / "trained_evaluation" / subset for info in shard_infos]
@@ -587,9 +630,11 @@ def run_base_subset_dp(args: argparse.Namespace, *, script_path: Path, repo_root
                     "--outputs-dir",
                     str(info["output_root"]),
                     "--skip-comparison",
+                    "--progress-file",
+                    str(info["progress_path"]),
                 ]
             )
-            jobs.append({**info, "cmd": cmd})
+            jobs.append({**info, "cmd": cmd, "progress_total": len(info["rows"]) * args.n_runs})
         print(f"[Stage 9] {subset}: {len(data_rows)} test rows -> {len(jobs)} GPU shards")
         run_process_group(jobs, desc=f"Stage 9 {subset}", repo_root=repo_root)
         shard_dirs = [info["output_root"] / args.model_alias / "base_evaluation" / subset for info in shard_infos]
@@ -842,11 +887,17 @@ def run_causal_subset_dp(args: argparse.Namespace, *, script_path: Path, repo_ro
             str(neurons_root),
             "--causal-dir",
             str(info["output_root"]),
+            "--progress-file",
+            str(info["progress_path"]),
             "--overwrite",
         ]
         if args.model_path:
             cmd.extend(["--model-path", args.model_path])
-        jobs.append({**info, "cmd": cmd})
+        shard_progress_total = sum(
+            len([row for row in info["rows"] if row.get("task_type") == task_type])
+            for task_type in TASK_TYPES
+        ) * len(parse_interventions(args.interventions))
+        jobs.append({**info, "cmd": cmd, "progress_total": shard_progress_total})
     print(f"[Stage 10] {subset}: {len(data_rows)} test rows -> {len(jobs)} GPU shards")
     run_process_group(jobs, desc=f"Stage 10 {subset}", repo_root=repo_root)
     shard_dirs = [info["output_root"] / args.model_alias / subset for info in shard_infos]

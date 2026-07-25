@@ -26,6 +26,7 @@ from cttn.eval_metrics import (
     write_csv,
 )
 from cttn.paths import ensure_dir, path_from_config
+from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
 from ps_common import (
     STAGE_VERSION,
     dataset_manifest,
@@ -67,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
+    parser.add_argument("--progress-file", default=None)
     return parser.parse_args()
 
 
@@ -247,11 +249,16 @@ def evaluate_subset(
         run_outputs: dict[str, list[dict[str, Any]]] = {}
         run_summaries: dict[str, dict[str, Any]] = {}
         all_per_task = []
-        for run_id in range(args.n_runs):
+        tracker = ProgressTracker(args.progress_file, total=len(rows) * args.n_runs) if args.progress_file else None
+        for run_id in progress(range(args.n_runs), desc=f"{subset} PS Base/Default runs", unit="run"):
             print(f"{subset}: Base/Default evaluation run {run_id + 1}/{args.n_runs}")
-            outputs = w2t_utils.evaluate_batched(
+            outputs = evaluate_batched_with_task_progress(
+                w2t_utils,
                 rows,
                 agent,
+                batch_size=args.batch_size,
+                desc=f"{subset} PS base run {run_id + 1}/{args.n_runs} tasks",
+                tracker=tracker,
                 max_rounds=args.max_rounds,
                 record_mode=args.record_mode,
                 prompt_mode="current",

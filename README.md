@@ -327,7 +327,7 @@ python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --data
 
 方法：只用 test split，加载阶段 7 adapter，prompt 固定 `current/no_reasoning/enable_thinking=false`。本阶段只产出 `CTD-Masked-LoRA` 绝对指标，和 Base 的 delta 放到阶段 9 统一算。
 
-八卡运行方式：`--subset all` 时先完整跑 `single_hop`，结束后再跑 `multi_hop`，两者不并行。每个 subset 内把 test 题目按顺序切成 8 份，每张卡只暴露 1 个 GPU、加载 1 份同模型独立评测；结束后自动合并 8 个 shard，写回上面的正式输出目录，并打印 `Acc/AvgTC/TCR/ToolAcc` 等关键指标。默认合并成功后删除 `_shards` 临时目录；调试时可加 `--keep-shards` 保留 shard 输入、输出和日志。
+八卡运行方式：`--subset all` 时先完整跑 `single_hop`，结束后再跑 `multi_hop`，两者不并行。每个 subset 内把 test 题目按顺序切成 8 份，每张卡只暴露 1 个 GPU、加载 1 份同模型独立评测；主进度条按全局已评测题目数累计，正式 `--batch-size 1` 时基本就是一道题一跳。结束后自动合并 8 个 shard，写回上面的正式输出目录，并打印 `Acc/AvgTC/TCR/ToolAcc` 等关键指标。默认合并成功后删除 `_shards` 临时目录；调试时可加 `--keep-shards` 保留 shard 输入、输出、日志和进度文件。
 
 ## 阶段 9：Base 模型评测与 delta 计算
 
@@ -351,7 +351,7 @@ python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct -
 
 方法：只用 test split，不加载 adapter、不做 activation mask。Base 和阶段 8 走同一套 HF/When2Tool 评测路径，随后读取双方 summary 计算 delta。
 
-八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型。shard 只跑 Base 评测，合并后再统一读取阶段 8 的训练后 summary 计算 `comparison_with_base.csv`，最后打印 Base 指标和 delta 指标。
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型，主进度条按全局已评测题目数累计。shard 只跑 Base 评测，合并后再统一读取阶段 8 的训练后 summary 计算 `comparison_with_base.csv`，最后打印 Base 指标和 delta 指标。
 
 ## 阶段 10：因果验证
 
@@ -377,7 +377,7 @@ python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct
 
 方法：只用 test split 和未训练 base 模型。比较 `Base`、随机 mask、单类型 TDN mask、共享 CTD mask、私有 TDN mask；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
 
-八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。随机 mask 由相同 seed 和同一 CTD 集合确定，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc/avg_delta_tcr/var_acc`。
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。主进度条按因果验证中的实际题目评测次数累计，也就是 task type 和 intervention 都会计入。随机 mask 由相同 seed 和同一 CTD 集合确定，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc/avg_delta_tcr/var_acc`。
 
 ## 阶段 11：结果汇总
 
