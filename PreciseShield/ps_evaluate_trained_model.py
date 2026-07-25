@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import gc
+import sys
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMMON_DIR = REPO_ROOT / "code" / "00_common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+if str(REPO_ROOT / "PreciseShield") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "PreciseShield"))
 
 import torch
 
@@ -271,4 +279,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
