@@ -9,7 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "PreciseShield" / "ps_train_masked_lora.py"
-MODEL_PARALLEL_ALIASES = {"qwen3-14b", "qwen3-32b", "llama3.3-70b"}
+MODEL_PARALLEL_ALIASES = {"qwen3-32b", "llama3.3-70b"}
 
 
 def parse_args() -> argparse.Namespace:

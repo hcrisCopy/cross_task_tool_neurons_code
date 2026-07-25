@@ -53,8 +53,8 @@ llama3.3-70b
 
 八卡策略：
 
-- PS-4：`auto` 下 `qwen3-1.7b/qwen3-4b-instruct` 按数据切 8 份；`qwen3-14b/qwen3-32b/llama3.3-70b` 用 `device_map=auto` 模型并行。
-- PS-7/8/9/10：大模型默认模型并行；小模型在 `subset=all` 时默认 single-hop 和 multi-hop 并行跑，产物仍按 subset 隔离。
+- PS-4：按单机 8 张 H20 96GB 设计，`auto` 下 `qwen3-1.7b/qwen3-4b-instruct/qwen3-14b/llama3.1-8b` 按数据切 8 份；`qwen3-32b/llama3.3-70b` 用 `device_map=auto` 模型并行。
+- PS-7/8/9/10：`auto` 下 `qwen3-32b/llama3.3-70b` 默认模型并行；其余模型在 `subset=all` 时默认 single-hop 和 multi-hop 并行跑，产物仍按 subset 隔离。
 - PS-5/6 是已保存 activation 的统计和集合运算，不加载大模型。
 
 ## 方法定义
