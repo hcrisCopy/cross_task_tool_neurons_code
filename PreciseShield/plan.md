@@ -265,18 +265,76 @@ max_seq_length = 4096
 - Base 与训练后模型使用同一批 test rows。
 - 输出 `comparison_with_base.csv`。
 
-核心指标沿用旧项目和 When2Tool：
+论文对齐主指标沿用 When2Tool 的 accuracy-vs-tool-calls trade-off：
 
 - `final_accuracy`
-- `tool_calls`
+- `total_tool_calls`
 - `avg_tool_calls`
 - `tool_call_rate`
+- `total_token_cost`
+- `avg_token_cost`
+
+其中：
+
+```text
+final_accuracy = final_correct / n
+avg_tool_calls = total_tool_calls / n
+tool_call_rate = total_tool_calls / total_expected_steps
+```
+
+`total_expected_steps` 按 When2Tool 口径读取 `expected.steps`；若缺失，单跳默认 1，多跳默认 3。
+
+阶段 9 必须输出论文口径的 Base-vs-trained delta：
+
+```text
+Delta Acc (pp) = 100 * (Acc_trained - Acc_base)
+
+Delta Avg Tool Calls = AvgTC_trained - AvgTC_base
+
+Delta Tool Call Rate = TCR_trained - TCR_base
+
+Delta Total Tool Calls (%) =
+100 * (TotalTC_trained - TotalTC_base) / TotalTC_base
+
+Tool Call Reduction (%) = - Delta Total Tool Calls (%)
+
+Acc Cost Per Saved Call =
+Delta Acc (pp) / (-Delta Avg Tool Calls), when Delta Avg Tool Calls < 0
+```
+
+对应 `comparison_with_base.csv` 中的列名：
+
+- `delta_acc_pp`
+- `delta_avg_tool_calls`
+- `delta_tool_call_rate`
+- `delta_total_tool_calls_percent`
+- `tool_call_reduction_percent`
+- `acc_cost_per_saved_call`
+
+这些是和 When2Tool 论文最直接对齐的主报告指标。`delta_acc_pp` 为负时表示准确率损失；`tool_call_reduction_percent` 为正时表示节省工具调用。
+
+本实验额外保留工具决策二分类指标：
+
 - `decision_accuracy`
 - `over_call_rate`
 - `under_call_rate`
+- `tool_precision`
+- `tool_recall`
+- `tool_f1`
 - 每个 task type 的 per-type 指标
 
-因为训练目标是第一步“调不调工具”，`decision_accuracy/over_call/under_call/tool_call_rate` 比最终答案准确率更能反映目标是否被学到。
+它们也在阶段 9 计算相对 Base 的 delta：
+
+```text
+delta_decision_accuracy_pp
+delta_over_call_rate_pp
+delta_under_call_rate_pp
+delta_tool_precision_pp
+delta_tool_recall_pp
+delta_tool_f1_pp
+```
+
+这组指标不是替代 When2Tool 论文主指标，而是因为本项目训练目标是第一步“调不调工具”，需要额外观察过调和漏调。
 
 ## 9. 因果验证
 
