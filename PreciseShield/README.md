@@ -52,11 +52,12 @@ llama3.3-70b
 - 正式评测使用 `--n-runs 3`；小样本 smoke 才改成 `--n-runs 1`。
 - 每阶段都有参数敏感 `manifest.json`。产物存在且参数一致会提前跳过；发现旧错误产物时在原命令末尾加 `--clean`，清理范围限制在 `../cross_task_tool_neurons_data/precise_shield/` 对应阶段内。
 
-八卡策略：PS-8/9/10 的 `--subset all` 都先跑 `single_hop` 再跑 `multi_hop`；每个 subset 内把 test 题目切成 8 份，每张卡加载 1 份同模型独立评测，主进度条按已评测题目数走，结束后合并 shard 并打印关键指标。
+八卡策略：
 
 - PS-4：按单机 8 张 H20 96GB 设计，`auto` 下 `qwen3-1.7b/qwen3-4b-instruct/qwen3-14b/llama3.1-8b` 按数据切 8 份；`qwen3-32b/llama3.3-70b` 用 `device_map=auto` 模型并行。
-- PS-7/8/9/10：`auto` 下 `qwen3-32b/llama3.3-70b` 默认模型并行；其余模型在 `subset=all` 时默认 single-hop 和 multi-hop 并行跑，产物仍按 subset 隔离。
-- PS-5/6 是已保存 activation 的统计和集合运算，不加载大模型。
+- PS-5/6：只做已保存 activation 的统计和集合运算，不加载大模型。
+- PS-7：训练阶段仍按独立 adapter 跑，`single_hop` 和 `multi_hop` 产物分开保存。
+- PS-8/9/10：`--subset all` 时先跑 `single_hop` 再跑 `multi_hop`，两者不并行；每个 subset 内把 test 题目切成 8 份，每张卡加载 1 份同模型独立评测，主进度条按已评测题目数走，结束后合并 shard 并打印关键指标。
 
 ## 方法定义
 
