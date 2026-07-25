@@ -20,6 +20,7 @@ from cttn.eval_metrics import flatten_summary, write_csv
 from cttn.io import read_json, write_json
 from cttn.modeling import VALID_MODEL_ALIASES
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.progress import progress
 
 
 def parse_args() -> argparse.Namespace:
@@ -510,12 +511,24 @@ def main() -> None:
     ensure_dir(report_dir)
     figures_dir = ensure_dir(report_dir / "figures")
 
-    neuron_rows = collect_neuron_rows(model_aliases, neurons_root)
-    training_rows = collect_training_rows(model_aliases, checkpoints_root)
-    evaluation_rows = collect_evaluation_rows(model_aliases, outputs_root)
-    base_rows = collect_base_rows(model_aliases, outputs_root)
-    comparison_rows = collect_training_comparison_rows(model_aliases, outputs_root)
-    causal_rows, causal_cross_rows = collect_causal_rows(model_aliases, causal_root)
+    collectors = [
+        ("neuron_discovery_summary", lambda: collect_neuron_rows(model_aliases, neurons_root)),
+        ("training_run_summary", lambda: collect_training_rows(model_aliases, checkpoints_root)),
+        ("trained_evaluation_summary", lambda: collect_evaluation_rows(model_aliases, outputs_root)),
+        ("base_evaluation_summary", lambda: collect_base_rows(model_aliases, outputs_root)),
+        ("training_comparison", lambda: collect_training_comparison_rows(model_aliases, outputs_root)),
+        ("causal", lambda: collect_causal_rows(model_aliases, causal_root)),
+    ]
+    collected: dict[str, Any] = {}
+    for name, fn in progress(collectors, desc="Stage 11 collect artifacts", unit="table"):
+        collected[name] = fn()
+
+    neuron_rows = collected["neuron_discovery_summary"]
+    training_rows = collected["training_run_summary"]
+    evaluation_rows = collected["trained_evaluation_summary"]
+    base_rows = collected["base_evaluation_summary"]
+    comparison_rows = collected["training_comparison"]
+    causal_rows, causal_cross_rows = collected["causal"]
     model_summary = build_model_summary(
         model_aliases,
         neuron_rows,
@@ -562,6 +575,28 @@ def main() -> None:
             "figures": [relative_posix(fig, report_dir) for fig in existing_figures],
         },
     )
+    print(
+        "Stage 11 row counts: "
+        f"neurons={len(neuron_rows)}, "
+        f"training={len(training_rows)}, "
+        f"base_eval={len(base_rows)}, "
+        f"trained_eval={len(evaluation_rows)}, "
+        f"comparison={len(comparison_rows if comparison_rows else evaluation_rows)}, "
+        f"causal={len(causal_rows)}, "
+        f"causal_cross={len(causal_cross_rows)}, "
+        f"model_summary={len(model_summary)}"
+    )
+    if model_summary:
+        print("Stage 11 key model summary:")
+        for row in model_summary:
+            print(
+                f"  {row['model_alias']} {row['subset']}: "
+                f"CTD={row.get('ctd_count')}, "
+                f"BaseAcc={row.get('base_acc')}, "
+                f"CTDAcc={row.get('ctd_masked_lora_acc')}, "
+                f"DeltaAccPP={row.get('delta_acc_pp')}, "
+                f"MaskCTDDeltaAcc={row.get('mask_ctd_avg_delta_acc')}"
+            )
     print(f"Wrote final report: {report_dir}")
 
 

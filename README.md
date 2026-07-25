@@ -313,7 +313,7 @@ python code/11_multigpu/run_training.py --model-alias qwen3-4b-instruct --datase
 python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
-涉及文件：`code/11_multigpu/run_evaluation.py`，`code/08_evaluation/evaluate_trained_model.py`，改造后 test 数据，阶段 7 adapter，`third_party/when2tool/`。
+涉及文件：`code/11_multigpu/run_evaluation.py`，`code/11_multigpu/sharded_eval_common.py`，`code/08_evaluation/evaluate_trained_model.py`，`code/00_common/cttn/progress.py`，改造后 test 数据，阶段 7 adapter，`third_party/when2tool/`。
 
 输出：
 
@@ -327,6 +327,8 @@ python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --data
 
 方法：只用 test split，加载阶段 7 adapter，prompt 固定 `current/no_reasoning/enable_thinking=false`。本阶段只产出 `CTD-Masked-LoRA` 绝对指标，和 Base 的 delta 放到阶段 9 统一算。
 
+八卡运行方式：`--subset all` 时先完整跑 `single_hop`，结束后再跑 `multi_hop`，两者不并行。每个 subset 内把 test 题目按顺序切成 8 份，每张卡只暴露 1 个 GPU、加载 1 份同模型独立评测；结束后自动合并 8 个 shard，写回上面的正式输出目录，并打印 `Acc/AvgTC/TCR/ToolAcc` 等关键指标。默认合并成功后删除 `_shards` 临时目录；调试时可加 `--keep-shards` 保留 shard 输入、输出和日志。
+
 ## 阶段 9：Base 模型评测与 delta 计算
 
 指令：
@@ -335,7 +337,7 @@ python code/11_multigpu/run_evaluation.py --model-alias qwen3-4b-instruct --data
 python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
 ```
 
-涉及文件：`code/11_multigpu/run_base_evaluation.py`，`code/08_evaluation/evaluate_base_model.py`，改造后 test 数据，阶段 8 训练后评测产物，`third_party/when2tool/`。
+涉及文件：`code/11_multigpu/run_base_evaluation.py`，`code/11_multigpu/sharded_eval_common.py`，`code/08_evaluation/evaluate_base_model.py`，`code/00_common/cttn/progress.py`，改造后 test 数据，阶段 8 训练后评测产物，`third_party/when2tool/`。
 
 输出：
 
@@ -349,6 +351,8 @@ python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct -
 
 方法：只用 test split，不加载 adapter、不做 activation mask。Base 和阶段 8 走同一套 HF/When2Tool 评测路径，随后读取双方 summary 计算 delta。
 
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型。shard 只跑 Base 评测，合并后再统一读取阶段 8 的训练后 summary 计算 `comparison_with_base.csv`，最后打印 Base 指标和 delta 指标。
+
 ## 阶段 10：因果验证
 
 指令：
@@ -357,20 +361,23 @@ python code/11_multigpu/run_base_evaluation.py --model-alias qwen3-4b-instruct -
 python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/neurons --causal-dir ../cross_task_tool_neurons_data/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 20260725
 ```
 
-涉及文件：`code/11_multigpu/run_causal_validation.py`，`code/09_causal_validation/run_causal_validation.py`，改造后 test 数据，阶段 5/6 神经元，`third_party/when2tool/`。
+涉及文件：`code/11_multigpu/run_causal_validation.py`，`code/11_multigpu/sharded_eval_common.py`，`code/09_causal_validation/run_causal_validation.py`，`code/00_common/cttn/progress.py`，改造后 test 数据，阶段 5/6 神经元，`third_party/when2tool/`。
 
 输出：
 
 ```text
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/random_mask_neurons.jsonl
-../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<intervention>/outputs.json
-../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<intervention>/summary.json
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<A|B|C>/<intervention>/outputs.json
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<A|B|C>/<intervention>/per_task.jsonl
+../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/<A|B|C>/<intervention>/summary.json
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/summary_table.csv
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/cross_type_summary.csv
 ../cross_task_tool_neurons_data/causal_validation/<model_alias>/<subset>/manifest.json
 ```
 
 方法：只用 test split 和未训练 base 模型。比较 `Base`、随机 mask、单类型 TDN mask、共享 CTD mask、私有 TDN mask；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
+
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。随机 mask 由相同 seed 和同一 CTD 集合确定，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc/avg_delta_tcr/var_acc`。
 
 ## 阶段 11：结果汇总
 
@@ -386,7 +393,7 @@ python code/10_reporting/build_final_report.py --model-alias qwen3-4b-instruct -
 python code/10_reporting/build_final_report.py --model-alias all --labels-dir ../cross_task_tool_neurons_data/labels --neurons-dir ../cross_task_tool_neurons_data/neurons --checkpoints-dir ../cross_task_tool_neurons_data/checkpoints --outputs-dir ../cross_task_tool_neurons_data/outputs --causal-dir ../cross_task_tool_neurons_data/causal_validation
 ```
 
-涉及文件：`code/10_reporting/build_final_report.py`，阶段 2/5/6/7/8/9/10 的 manifest、summary 和 csv 产物。
+涉及文件：`code/10_reporting/build_final_report.py`，`code/00_common/cttn/progress.py`，阶段 2/5/6/7/8/9/10 的 manifest、summary 和 csv 产物。
 
 输出：
 
@@ -405,6 +412,8 @@ python code/10_reporting/build_final_report.py --model-alias all --labels-dir ..
 ```
 
 方法：只读已有产物，不重新跑模型。把六模型的神经元数量、训练情况、Base/训练后评测、因果验证和 delta 汇总成表格与图。
+
+运行提示：阶段 11 会显示收集表格的进度条，结束时打印各汇总表行数和每个模型/单跳/多跳的关键摘要。
 
 ## 清理旧错误产物
 

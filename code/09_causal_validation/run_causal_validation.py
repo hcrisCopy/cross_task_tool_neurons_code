@@ -20,6 +20,7 @@ from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.lora import rows_to_keys, sample_random_like
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.progress import progress
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -207,14 +208,14 @@ def run_subset(
     summary_rows = []
     cross_by_intervention: dict[str, dict[str, Any]] = {}
 
-    for task_type in TASK_TYPES:
+    for task_type in progress(TASK_TYPES, desc=f"{subset} causal task types", unit="type"):
         task_rows = [row for row in data if row.get("task_type") == task_type]
         if not task_rows:
             continue
         tdn_rows = read_jsonl(single_dir / task_type / "TDN_neurons.jsonl")
         base_metrics = None
         type_metrics: dict[str, dict[str, Any]] = {}
-        for intervention in interventions:
+        for intervention in progress(interventions, desc=f"{subset}/{task_type} interventions", unit="case", leave=False):
             mask_rows = intervention_rows(
                 intervention,
                 task_type=task_type,
@@ -292,6 +293,14 @@ def run_subset(
         "cross_rows": len(cross_rows),
     }
     write_json(out_dir / "manifest.json", manifest)
+    mask_ctd = next((row for row in cross_rows if row.get("intervention") == "Mask-CTD"), None)
+    if mask_ctd:
+        print(
+            f"{subset}: Mask-CTD causal metrics "
+            f"avg_delta_acc={mask_ctd.get('avg_delta_acc')}, "
+            f"avg_delta_tcr={mask_ctd.get('avg_delta_tcr')}, "
+            f"var_acc={mask_ctd.get('var_acc')}"
+        )
     print(f"Wrote causal validation: {out_dir}")
     return manifest
 

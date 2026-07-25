@@ -26,6 +26,7 @@ from cttn.eval_metrics import (
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.modeling import infer_tool_format, resolve_model_path
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
+from cttn.progress import progress
 from cttn.when2tool_bridge import load_model_module, load_utils
 
 
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
+    parser.add_argument("--skip-comparison", action="store_true")
     return parser.parse_args()
 
 
@@ -226,7 +228,7 @@ def evaluate_subset(
         run_outputs: dict[str, list[dict[str, Any]]] = {}
         run_summaries: dict[str, dict[str, Any]] = {}
         all_per_task = []
-        for run_id in range(args.n_runs):
+        for run_id in progress(range(args.n_runs), desc=f"{subset} Base/Default runs", unit="run"):
             print(f"{subset}: Base/Default evaluation run {run_id + 1}/{args.n_runs}")
             outputs = w2t_utils.evaluate_batched(
                 data,
@@ -270,6 +272,14 @@ def evaluate_subset(
                 "summary": summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {})),
             },
         )
+        overall = summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {}))
+        print(
+            f"{subset}: Base/Default metrics "
+            f"n={overall.get('n')}, "
+            f"Acc={overall.get('final_accuracy')}, "
+            f"AvgTC={overall.get('avg_tool_calls')}, "
+            f"ToolAcc={overall.get('decision_accuracy')}"
+        )
         print(f"Wrote base evaluation: {out_dir}")
         return summary_payload
     finally:
@@ -302,7 +312,7 @@ def main() -> None:
             w2t_utils=w2t_utils,
             w2t_model=w2t_model,
         )
-        comparison_manifest = maybe_build_comparison(args=args, outputs_root=outputs_root, subset=subset)
+        comparison_manifest = None if args.skip_comparison else maybe_build_comparison(args=args, outputs_root=outputs_root, subset=subset)
         root_manifest["subsets"][subset] = {
             "path": str(out_dir),
             "overall": summary.get("overall", summary.get("mean_std", {}).get("overall", {})),

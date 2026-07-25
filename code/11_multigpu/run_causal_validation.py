@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 
@@ -11,8 +8,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGE10_SCRIPT = REPO_ROOT / "code" / "09_causal_validation" / "run_causal_validation.py"
 
 
+def selected_subsets(value: str) -> list[str]:
+    return ["single_hop", "multi_hop"] if value == "all" else [value]
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stage 10 eight-GPU launcher for causal validation.")
+    parser = argparse.ArgumentParser(description="Stage 10 data-parallel launcher for causal validation.")
     parser.add_argument("--model-alias", required=True)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--dataset-dir", default=None)
@@ -31,72 +32,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
     parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument("--keep-shards", action="store_true", help="Keep shard inputs, outputs, and logs after merge.")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
-def split_gpus(value: str) -> list[str]:
-    gpus = [item.strip() for item in value.split(",") if item.strip()]
-    if not gpus:
-        raise ValueError("--gpus must contain at least one GPU id")
-    return gpus
-
-
-def build_stage10_cmd(args: argparse.Namespace) -> list[str]:
-    cmd = [
-        sys.executable,
-        str(STAGE10_SCRIPT),
-        "--model-alias",
-        args.model_alias,
-        "--when2tool-repo",
-        args.when2tool_repo,
-        "--subset",
-        args.subset,
-        "--max-test-samples",
-        str(args.max_test_samples),
-        "--interventions",
-        args.interventions,
-        "--batch-size",
-        str(args.batch_size),
-        "--max-rounds",
-        str(args.max_rounds),
-        "--max-new-tokens",
-        str(args.max_new_tokens),
-        "--max-model-len",
-        str(args.max_model_len),
-        "--torch-dtype",
-        args.torch_dtype,
-        "--device-map",
-        args.device_map,
-        "--record-mode",
-        args.record_mode,
-        "--seed",
-        str(args.seed),
-    ]
-    if args.model_path:
-        cmd.extend(["--model-path", args.model_path])
-    if args.dataset_dir:
-        cmd.extend(["--dataset-dir", args.dataset_dir])
-    if args.neurons_dir:
-        cmd.extend(["--neurons-dir", args.neurons_dir])
-    if args.causal_dir:
-        cmd.extend(["--causal-dir", args.causal_dir])
-    if args.clean:
-        cmd.append("--clean")
-    if args.overwrite:
-        cmd.append("--overwrite")
-    return cmd
-
-
 def main() -> None:
     args = parse_args()
-    gpus = split_gpus(args.gpus)
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpus)
-    cmd = build_stage10_cmd(args)
-    print("+", " ".join(cmd), f"(CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']})")
-    subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, check=True)
+    from sharded_eval_common import run_causal_subset_dp, write_root_manifest
+
+    subsets = selected_subsets(args.subset)
+    root_subsets = {}
+    print(f"[Stage 10] {args.model_alias}: running subsets sequentially: {', '.join(subsets)}")
+    for subset in subsets:
+        manifest = run_causal_subset_dp(args, script_path=STAGE10_SCRIPT, repo_root=REPO_ROOT, subset=subset)
+        root_subsets[subset] = manifest
+    from sharded_eval_common import resolve_causal_root
+
+    causal_root = resolve_causal_root(args.causal_dir)
+    write_root_manifest(
+        causal_root / args.model_alias / "manifest.json",
+        stage="10_causal_validation",
+        model_alias=args.model_alias,
+        subsets=root_subsets,
+    )
+    print(f"[Stage 10] {args.model_alias}: finished {len(subsets)} subset(s).")
 
 
 if __name__ == "__main__":
