@@ -253,14 +253,66 @@ def format_metric(value: Any) -> str:
     return str(value)
 
 
+def metric_delta(metrics: dict[str, Any], base_metrics: dict[str, Any], name: str) -> float | None:
+    if name not in metrics or name not in base_metrics:
+        return None
+    try:
+        return float(metrics[name]) - float(base_metrics[name])
+    except (TypeError, ValueError):
+        return None
+
+
+def add_tradeoff_deltas(row: dict[str, Any], metrics: dict[str, Any], base_metrics: dict[str, Any]) -> dict[str, Any]:
+    eps = 1.0e-12
+    delta_acc = metric_delta(metrics, base_metrics, "final_accuracy")
+    delta_avg_tc = metric_delta(metrics, base_metrics, "avg_tool_calls")
+    delta_tcr = metric_delta(metrics, base_metrics, "tool_call_rate")
+    delta_total_tc = metric_delta(metrics, base_metrics, "total_tool_calls")
+
+    if delta_acc is not None:
+        row["delta_acc_pp"] = 100.0 * delta_acc
+    if delta_avg_tc is not None:
+        row["delta_avg_tool_calls"] = delta_avg_tc
+        row["delta_acc_per_delta_avg_tool_call"] = (
+            (100.0 * delta_acc) / delta_avg_tc
+            if delta_acc is not None and abs(delta_avg_tc) > eps
+            else ""
+        )
+        row["acc_cost_per_saved_call"] = (
+            (100.0 * delta_acc) / (-delta_avg_tc)
+            if delta_acc is not None and delta_avg_tc < 0
+            else ""
+        )
+    if delta_tcr is not None:
+        row["delta_tool_call_rate"] = delta_tcr
+    if delta_total_tc is not None:
+        base_total_tc = float(base_metrics.get("total_tool_calls", 0.0) or 0.0)
+        if abs(base_total_tc) > eps:
+            delta_pct = 100.0 * delta_total_tc / (base_total_tc + eps)
+            row["delta_total_tool_calls_percent"] = delta_pct
+            row["tool_call_reduction_percent"] = -delta_pct
+        else:
+            row["delta_total_tool_calls_percent"] = ""
+            row["tool_call_reduction_percent"] = ""
+    return row
+
+
+def numeric_values(rows: list[dict[str, Any]], key: str) -> list[float]:
+    return [float(row[key]) for row in rows if isinstance(row.get(key), (int, float))]
+
+
 def print_eval_metrics(stage: str, subset: str, summary: dict[str, Any]) -> None:
     overall = eval_overall(summary)
     parts = [
         f"n={format_metric(overall.get('n', ''))}",
         f"Acc={format_metric(overall.get('final_accuracy', ''))}",
+        f"TotalTC={format_metric(overall.get('total_tool_calls', ''))}",
         f"AvgTC={format_metric(overall.get('avg_tool_calls', ''))}",
         f"TCR={format_metric(overall.get('tool_call_rate', ''))}",
         f"ToolAcc={format_metric(overall.get('decision_accuracy', ''))}",
+        f"OverCall={format_metric(overall.get('over_call_rate', ''))}",
+        f"UnderCall={format_metric(overall.get('under_call_rate', ''))}",
+        f"ValidToolRate={format_metric(overall.get('valid_tool_call_rate', ''))}",
     ]
     print(f"[{stage}] {subset} metrics: " + ", ".join(parts))
 
@@ -725,8 +777,10 @@ def print_comparison_metrics(subset: str, manifest: dict[str, Any]) -> None:
         print(
             "[Stage 9] "
             f"{subset} delta: delta_acc_pp={row.get('delta_acc_pp', '')}, "
+            f"delta_total_tool_calls_percent={row.get('delta_total_tool_calls_percent', '')}, "
+            f"tool_call_reduction_percent={row.get('tool_call_reduction_percent', '')}, "
             f"delta_avg_tool_calls={row.get('delta_avg_tool_calls', '')}, "
-            f"tool_call_reduction_percent={row.get('tool_call_reduction_percent', '')}"
+            f"delta_tool_call_rate={row.get('delta_tool_call_rate', '')}"
         )
 
 
@@ -956,7 +1010,7 @@ def write_causal_outputs(
             continue
         tdn_rows = read_jsonl(single_dir / task_type / "TDN_neurons.jsonl")
         base_metrics = None
-        type_metrics: dict[str, dict[str, Any]] = {}
+        type_rows: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
         for intervention in interventions:
             outputs: list[dict[str, Any]] = []
             per_task: list[dict[str, Any]] = []
@@ -976,7 +1030,6 @@ def write_causal_outputs(
 
             mask_rows = intervention_rows(intervention, tdn_rows=tdn_rows, ctd_rows=ctd_rows, random_rows=random_rows)
             metrics = summary["overall"]
-            type_metrics[intervention] = metrics
             if intervention == "Base":
                 base_metrics = metrics
             row = {
@@ -987,35 +1040,73 @@ def write_causal_outputs(
                 "masked_neurons": len(mask_rows),
             }
             row.update(metrics)
-            summary_rows.append(row)
+            type_rows.append((intervention, row, metrics))
         if base_metrics is not None:
-            for intervention, metrics in type_metrics.items():
+            for intervention, row, metrics in type_rows:
+                add_tradeoff_deltas(row, metrics, base_metrics)
                 cross = cross_by_intervention.setdefault(
                     intervention,
-                    {"delta_acc": [], "delta_tcr": [], "task_type_metrics": {}},
+                    {
+                        "delta_acc": [],
+                        "delta_tcr": [],
+                        "delta_rows": [],
+                        "task_type_metrics": {},
+                        "task_type_delta_rows": {},
+                    },
                 )
                 cross["delta_acc"].append(float(metrics["final_accuracy"]) - float(base_metrics["final_accuracy"]))
                 cross["delta_tcr"].append(float(metrics["tool_call_rate"]) - float(base_metrics["tool_call_rate"]))
+                cross["delta_rows"].append(row)
                 cross["task_type_metrics"][task_type] = metrics
+                cross["task_type_delta_rows"][task_type] = row
+        summary_rows.extend(row for _intervention, row, _metrics in type_rows)
 
     cross_rows = []
     for intervention, payload in sorted(cross_by_intervention.items()):
         deltas = payload["delta_acc"]
         delta_tcr = payload["delta_tcr"]
+        delta_rows = payload["delta_rows"]
         metrics_by_type = payload["task_type_metrics"]
+        delta_rows_by_type = payload["task_type_delta_rows"]
+        delta_avg_tc_values = numeric_values(delta_rows, "delta_avg_tool_calls")
+        delta_total_tc_pct_values = numeric_values(delta_rows, "delta_total_tool_calls_percent")
+        tool_reduction_values = numeric_values(delta_rows, "tool_call_reduction_percent")
+        acc_per_delta_tc_values = numeric_values(delta_rows, "delta_acc_per_delta_avg_tool_call")
+        acc_cost_values = numeric_values(delta_rows, "acc_cost_per_saved_call")
         row = {
             "model_alias": model_alias,
             "subset": subset,
             "intervention": intervention,
             "avg_delta_acc": sum(deltas) / len(deltas) if deltas else 0.0,
+            "avg_delta_acc_pp": 100.0 * (sum(deltas) / len(deltas)) if deltas else 0.0,
             "var_acc": statistics.pvariance(deltas) if len(deltas) > 1 else 0.0,
             "avg_delta_tcr": sum(delta_tcr) / len(delta_tcr) if delta_tcr else 0.0,
+            "avg_delta_tool_call_rate": sum(delta_tcr) / len(delta_tcr) if delta_tcr else 0.0,
+            "avg_delta_avg_tool_calls": sum(delta_avg_tc_values) / len(delta_avg_tc_values) if delta_avg_tc_values else 0.0,
+            "avg_delta_total_tool_calls_percent": (
+                sum(delta_total_tc_pct_values) / len(delta_total_tc_pct_values)
+                if delta_total_tc_pct_values
+                else ""
+            ),
+            "avg_tool_call_reduction_percent": (
+                sum(tool_reduction_values) / len(tool_reduction_values) if tool_reduction_values else ""
+            ),
+            "avg_delta_acc_per_delta_avg_tool_call": (
+                sum(acc_per_delta_tc_values) / len(acc_per_delta_tc_values) if acc_per_delta_tc_values else ""
+            ),
+            "avg_acc_cost_per_saved_call": sum(acc_cost_values) / len(acc_cost_values) if acc_cost_values else "",
         }
         for task_type in TASK_TYPES:
             metrics = metrics_by_type.get(task_type, {})
+            delta_row = delta_rows_by_type.get(task_type, {})
             row[f"acc_{task_type}"] = metrics.get("final_accuracy")
             row[f"tool_acc_{task_type}"] = metrics.get("decision_accuracy")
             row[f"tcr_{task_type}"] = metrics.get("tool_call_rate")
+            row[f"delta_acc_pp_{task_type}"] = delta_row.get("delta_acc_pp")
+            row[f"delta_avg_tool_calls_{task_type}"] = delta_row.get("delta_avg_tool_calls")
+            row[f"tool_call_reduction_percent_{task_type}"] = delta_row.get("tool_call_reduction_percent")
+            row[f"delta_acc_per_delta_avg_tool_call_{task_type}"] = delta_row.get("delta_acc_per_delta_avg_tool_call")
+            row[f"acc_cost_per_saved_call_{task_type}"] = delta_row.get("acc_cost_per_saved_call")
         cross_rows.append(row)
 
     write_csv(out_dir / "summary_table.csv", summary_rows)
@@ -1054,7 +1145,9 @@ def print_causal_metrics(subset: str, rows: list[dict[str, Any]]) -> None:
     print(
         "[Stage 10] "
         f"{subset} causal: intervention={ctd.get('intervention')}, "
-        f"avg_delta_acc={ctd.get('avg_delta_acc')}, "
-        f"avg_delta_tcr={ctd.get('avg_delta_tcr')}, "
-        f"var_acc={ctd.get('var_acc')}"
+        f"avg_delta_acc_pp={ctd.get('avg_delta_acc_pp', ctd.get('avg_delta_acc', ''))}, "
+        f"avg_tool_call_reduction_percent={ctd.get('avg_tool_call_reduction_percent', '')}, "
+        f"avg_delta_avg_tool_calls={ctd.get('avg_delta_avg_tool_calls', '')}, "
+        f"avg_delta_tool_call_rate={ctd.get('avg_delta_tool_call_rate', ctd.get('avg_delta_tcr', ''))}, "
+        f"var_acc={ctd.get('var_acc', '')}"
     )

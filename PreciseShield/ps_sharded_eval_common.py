@@ -290,9 +290,13 @@ def print_eval_metrics(stage: str, subset: str, summary: dict[str, Any]) -> None
     parts = [
         f"n={format_metric(overall.get('n', ''))}",
         f"Acc={format_metric(overall.get('final_accuracy', ''))}",
+        f"TotalTC={format_metric(overall.get('total_tool_calls', ''))}",
         f"AvgTC={format_metric(overall.get('avg_tool_calls', ''))}",
         f"TCR={format_metric(overall.get('tool_call_rate', ''))}",
         f"ToolAcc={format_metric(overall.get('decision_accuracy', ''))}",
+        f"OverCall={format_metric(overall.get('over_call_rate', ''))}",
+        f"UnderCall={format_metric(overall.get('under_call_rate', ''))}",
+        f"ValidToolRate={format_metric(overall.get('valid_tool_call_rate', ''))}",
     ]
     print(f"[{stage}] {subset} metrics: " + ", ".join(parts))
 
@@ -699,8 +703,10 @@ def print_comparison_metrics(subset: str, manifest: dict[str, Any]) -> None:
         print(
             "[PS-9] "
             f"{subset} delta: delta_acc_pp={row.get('delta_acc_pp', '')}, "
+            f"delta_total_tool_calls_percent={row.get('delta_total_tool_calls_percent', '')}, "
+            f"tool_call_reduction_percent={row.get('tool_call_reduction_percent', '')}, "
             f"delta_avg_tool_calls={row.get('delta_avg_tool_calls', '')}, "
-            f"tool_call_reduction_percent={row.get('tool_call_reduction_percent', '')}"
+            f"delta_tool_call_rate={row.get('delta_tool_call_rate', '')}"
         )
 
 
@@ -1067,6 +1073,8 @@ def print_causal_metrics(subset: str, rows: list[dict[str, Any]]) -> None:
         "[PS-10] "
         f"{subset} causal: intervention={ctd.get('intervention')}, "
         f"avg_delta_acc_pp={ctd.get('avg_delta_acc_pp', ctd.get('avg_delta_acc', ''))}, "
+        f"avg_tool_call_reduction_percent={ctd.get('avg_tool_call_reduction_percent', '')}, "
+        f"avg_delta_avg_tool_calls={ctd.get('avg_delta_avg_tool_calls', '')}, "
         f"avg_delta_tool_call_rate={ctd.get('avg_delta_tool_call_rate', ctd.get('avg_delta_tcr', ''))}, "
         f"var_acc={ctd.get('var_acc', '')}"
     )
