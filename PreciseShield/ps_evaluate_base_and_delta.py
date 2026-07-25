@@ -27,7 +27,6 @@ from cttn.eval_metrics import (
 )
 from cttn.paths import ensure_dir, path_from_config
 from cttn.progress import ProgressTracker, evaluate_batched_with_task_progress, progress
-from cttn.seeds import seed_arg_kwargs
 from ps_common import (
     STAGE_VERSION,
     dataset_manifest,
@@ -58,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--max-test-samples", type=int, default=0)
     parser.add_argument("--sample-strategy", choices=["balanced", "first"], default="balanced")
-    parser.add_argument("--seed", **seed_arg_kwargs())
+    parser.add_argument("--seed", type=int, choices=[2026], default=2026)
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--n-runs", type=int, default=3)
@@ -70,6 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
     parser.add_argument("--progress-file", default=None)
+    parser.add_argument("--skip-comparison", action="store_true")
     return parser.parse_args()
 
 
@@ -322,7 +322,7 @@ def main() -> None:
             w2t_utils=w2t_utils,
             w2t_model=w2t_model,
         )
-        comparison = maybe_build_comparison(args, outputs_root, subset)
+        comparison = {} if args.skip_comparison else maybe_build_comparison(args, outputs_root, subset)
         root_manifest["subsets"][subset] = {
             "path": str(base_dir(outputs_root, args.model_alias, subset)),
             "overall": summary.get("overall", summary.get("mean_std", {}).get("overall", {})),

@@ -151,7 +151,7 @@ modelscope download --model LLM-Research/Llama-3.3-70B-Instruct --local_dir ../m
 
 - 固定模型标签：`qwen3-1.7b`、`qwen3-4b-instruct`、`qwen3-14b`、`qwen3-32b`、`llama3.1-8b`、`llama3.3-70b`。
 - 下面阶段 2 到阶段 11 的命令都是单机八卡正式实验命令；每次只替换 `--model-alias qwen3-4b-instruct`。
-- 随机种子只使用 `2026`、`42`、`123456`；正式命令默认 `2026`，代码内部需要派生随机流时也只从这三个值里选。
+- 正式实验随机种子固定 `2026`；需要随机 mask 的阶段也用同一个 seed。
 - 单跳 `single_hop` 和多跳 `multi_hop` 全程分开；阶段 7 分别训练两个 adapter。
 - 跑标签和构造数据使用 train+test；神经元发现和训练只使用 train；训练后评测、Base 评测和因果验证只使用 test。
 - Qwen 走 XML tool call，Llama 走 native tool calling；prompt、tool schema、parser、state machine 复用 `third_party/when2tool` 官方代码。
@@ -378,7 +378,7 @@ python code/11_multigpu/run_causal_validation.py --model-alias qwen3-4b-instruct
 
 方法：只用 test split 和未训练 base 模型。比较 `Base`、随机 mask、单类型 TDN mask、共享 CTD mask、私有 TDN mask；mask 作用在 FFN 目标模块输出坐标，并覆盖所有 token 位置。
 
-八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。主进度条按因果验证中的实际题目评测次数累计，也就是 task type 和 intervention 都会计入。随机 mask 由相同 seed 和同一 CTD 集合确定，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc/avg_delta_tcr/var_acc`。
+八卡运行方式：同阶段 8，先 `single_hop` 后 `multi_hop`，subset 内 8 卡切题并行，每卡加载一份 base 模型并跑相同 interventions。主进度条按因果验证中的实际题目评测次数累计，也就是 task type 和 intervention 都会计入。随机 mask 固定使用 `--seed 2026` 和同一 CTD 集合，合并时会检查各 shard 的随机 mask 是否一致；合并后打印 `Mask-CTD` 的 `avg_delta_acc/avg_delta_tcr/var_acc`。
 
 ## 阶段 11：结果汇总
 

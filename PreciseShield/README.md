@@ -45,14 +45,14 @@ llama3.3-70b
 
 - 切换模型时只替换命令里的 `--model-alias qwen3-4b-instruct`。
 - 单跳 `single_hop` 和多跳 `multi_hop` 全程分开保存；PS-7 会训练两个 adapter。
-- 随机种子只使用 `2026`、`42`、`123456`；正式命令默认 `2026`，代码内部需要派生随机流时也只从这三个值里选。
+- 正式实验随机种子固定 `2026`；PS-8/9/10 的采样和随机 mask 都用这个 seed。
 - 阶段 4 抽取 train/test；阶段 5/6 只用 train；阶段 7 只用 train；阶段 8/9/10 只用 test。
 - Prompt、tool schema、parser、state machine 复用 `third_party/when2tool`，固定 `current/no_reasoning/enable_thinking=false`。
 - Qwen 走 XML tool call，Llama 走 native tool calling，规则由公共代码按模型标签识别。
 - 正式评测使用 `--n-runs 3`；小样本 smoke 才改成 `--n-runs 1`。
 - 每阶段都有参数敏感 `manifest.json`。产物存在且参数一致会提前跳过；发现旧错误产物时在原命令末尾加 `--clean`，清理范围限制在 `../cross_task_tool_neurons_data/precise_shield/` 对应阶段内。
 
-八卡策略：
+八卡策略：PS-8/9/10 的 `--subset all` 都先跑 `single_hop` 再跑 `multi_hop`；每个 subset 内把 test 题目切成 8 份，每张卡加载 1 份同模型独立评测，主进度条按已评测题目数走，结束后合并 shard 并打印关键指标。
 
 - PS-4：按单机 8 张 H20 96GB 设计，`auto` 下 `qwen3-1.7b/qwen3-4b-instruct/qwen3-14b/llama3.1-8b` 按数据切 8 份；`qwen3-32b/llama3.3-70b` 用 `device_map=auto` 模型并行。
 - PS-7/8/9/10：`auto` 下 `qwen3-32b/llama3.3-70b` 默认模型并行；其余模型在 `subset=all` 时默认 single-hop 和 multi-hop 并行跑，产物仍按 subset 隔离。
@@ -192,7 +192,7 @@ W' = W0 + (M * B) A
 ## PS-8：训练后评测
 
 ```text
-python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
+python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --checkpoints-dir ../cross_task_tool_neurons_data/precise_shield/checkpoints --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：
@@ -205,12 +205,12 @@ python PreciseShield/ps_run_evaluation.py --model-alias qwen3-4b-instruct --data
 ../cross_task_tool_neurons_data/precise_shield/outputs/<model_alias>/trained_evaluation/<subset>/manifest.json
 ```
 
-做法：只用 test split，加载 PS-7 对应 subset adapter，按 When2Tool 官方流程评测。这里只写训练后绝对指标，Base delta 放到 PS-9。
+做法：只用 test split，加载 PS-7 对应 subset adapter，按 When2Tool 官方流程评测。输出训练后绝对指标；进度条按题数累计，结束打印 `Acc/AvgTC/TCR/ToolAcc`，Base delta 放到 PS-9。
 
 ## PS-9：Base 评测与 delta
 
 ```text
-python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
+python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --outputs-dir ../cross_task_tool_neurons_data/precise_shield/outputs --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --sample-strategy first --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：
@@ -222,12 +222,12 @@ python PreciseShield/ps_run_base_evaluation.py --model-alias qwen3-4b-instruct -
 ../cross_task_tool_neurons_data/precise_shield/outputs/<model_alias>/trained_evaluation/<subset>/comparison_with_base_manifest.json
 ```
 
-做法：Base 不加载 adapter，不做 activation mask。读取 PS-8 和本阶段 summary，输出 `delta_acc_pp`、`delta_avg_tool_calls`、`delta_tool_call_rate`、`tool_call_reduction_percent` 以及工具决策二分类 delta。
+做法：Base 不加载 adapter，不做 activation mask。shard 合并后读取 PS-8 和本阶段 summary 计算 delta，结束打印 Base 指标和 `delta_acc_pp/delta_avg_tool_calls/tool_call_reduction_percent`。
 
 ## PS-10：因果验证
 
 ```text
-python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --causal-dir ../cross_task_tool_neurons_data/precise_shield/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --max-test-samples 0 --sample-strategy first --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
+python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --causal-dir ../cross_task_tool_neurons_data/precise_shield/causal_validation --when2tool-repo third_party/when2tool --subset all --gpus 0,1,2,3,4,5,6,7 --max-test-samples 0 --sample-strategy first --interventions Base,Mask-Random,Mask-PS-TDN_c,Mask-PS-CTD,Mask-PS-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 输出：
@@ -239,7 +239,7 @@ python PreciseShield/ps_run_causal_validation.py --model-alias qwen3-4b-instruct
 ../cross_task_tool_neurons_data/precise_shield/causal_validation/<model_alias>/<subset>/cross_type_summary.csv
 ```
 
-做法：只用 test split 和 base 模型。mask 位置是 `down_proj` 输入 `h`，对选中 intermediate 坐标置零，并作用于所有 token 位置。
+做法：只用 test split 和 base 模型。mask 位置是 `down_proj` 输入 `h`，对选中 intermediate 坐标置零，并作用于所有 token 位置；进度条按题目乘 intervention 累计，结束打印 `Mask-PS-CTD` 的关键 delta。
 
 ## PS-11：结果汇总
 

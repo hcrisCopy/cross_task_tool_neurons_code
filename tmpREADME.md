@@ -831,7 +831,7 @@ code/11_multigpu/
 运行指令：
 
 ```text
-python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite
+python code/09_causal_validation/run_causal_validation.py --model-alias qwen3-4b-instruct --when2tool-repo third_party/when2tool --subset all --max-test-samples 30 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026
 ```
 
 如需清理旧的错误因果验证产物后重跑，在同一命令末尾加：
