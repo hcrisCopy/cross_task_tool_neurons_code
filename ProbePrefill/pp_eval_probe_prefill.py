@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import argparse
 import gc
+import os
+import random
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["WHEN2TOOL_QUIET_PROGRESS"] = "1"
+
 from pathlib import Path
 from typing import Any
 
@@ -15,18 +21,28 @@ from pp_common import (
     default_prefill_mode,
     flatten_probe_predictions,
     infer_tool_format,
+    copy_probe_artifacts,
+    is_dp_parent,
     load_model_module,
     load_utils,
     path_from_config,
+    make_dp_run_root,
+    parse_gpus,
     parse_thresholds,
+    prepare_feature_meta_shard,
+    prepare_feature_tensor_shard,
     pp_subdir,
     probe_prefill_root,
     read_json,
     read_jsonl,
     resolve_model_path,
     resolve_path,
+    run_data_parallel_workers,
+    set_single_process_cuda_visible,
+    shard_indices,
     should_skip,
     sigmoid_temperature,
+    sort_records_by_task_ids,
     subset_values,
     write_json,
     write_jsonl,
@@ -40,6 +56,8 @@ from cttn.eval_metrics import (
     flatten_summary,
     write_csv,
 )
+from cttn.progress import evaluate_batched_with_task_progress
+from cttn.seeds import seed_arg_kwargs
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,13 +73,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefill-mode", choices=["auto", "soft", "hard"], default="auto")
     parser.add_argument("--backend", choices=["vllm", "hf"], default="vllm")
     parser.add_argument("--n-runs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=1, help="Used by HF backend only in official AgentModel.")
+    parser.add_argument("--batch-size", type=int, default=1, help="Tasks per When2Tool evaluate_batched call; also controls progress granularity.")
     parser.add_argument("--max-rounds", type=int, default=10)
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--vllm-dtype", default="bfloat16")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
+    parser.add_argument("--gpus", default="0", help="Comma-separated GPU ids. More than one GPU runs data-parallel workers inside this script.")
+    parser.add_argument("--_worker-index", type=int, default=-1, help=argparse.SUPPRESS)
+    parser.add_argument("--_num-workers", type=int, default=1, help=argparse.SUPPRESS)
+    parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -157,6 +179,7 @@ def expected_params(
         "tensor_parallel_size": args.tensor_parallel_size,
         "vllm_dtype": args.vllm_dtype,
         "record_mode": args.record_mode,
+        "seed": args.seed,
         "prompt_mode": "current",
         "reasoning_mode": "no_reasoning",
         "enable_thinking": False,
@@ -182,6 +205,69 @@ def make_agent(args: argparse.Namespace, *, model_path: Path, w2t_model: Any) ->
     return w2t_model.AgentModel(**kwargs)
 
 
+def write_case_outputs(
+    args: argparse.Namespace,
+    *,
+    subset: str,
+    threshold: float,
+    prefill_mode: str,
+    out_dir: Path,
+    features: torch.Tensor,
+    meta_rows: list[dict[str, Any]],
+    probabilities: np.ndarray,
+    prefills: dict[str, str],
+    prefill_stats: dict[str, Any],
+    run_outputs: dict[str, list[dict[str, Any]]],
+    all_per_task: list[dict[str, Any]],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    run_summaries: dict[str, dict[str, Any]] = {}
+    for run_id in range(args.n_runs):
+        rows = [row for row in all_per_task if int(row.get("run_id", 0)) == run_id]
+        run_summaries[f"run_{run_id}"] = build_summary(rows)
+
+    outputs_payload: Any = run_outputs["run_0"] if args.n_runs == 1 else run_outputs
+    summary_payload: dict[str, Any] = (
+        run_summaries["run_0"]
+        if args.n_runs == 1
+        else {"runs": run_summaries, "mean_std": aggregate_run_summaries(list(run_summaries.values()))}
+    )
+    summary_payload["config"] = {
+        "threshold": threshold,
+        "temperature": args.temperature,
+        "prefill_mode": prefill_mode,
+        "prefill_stats": prefill_stats,
+        "probe_feature_dim": int(features.shape[1]),
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(out_dir / "probe_predictions.jsonl", flatten_probe_predictions(meta_rows, probabilities, threshold=threshold))
+    write_json(out_dir / "prefills.json", prefills)
+    write_json(out_dir / "prefill_stats.json", prefill_stats)
+    write_json(out_dir / "outputs.json", outputs_payload)
+    write_jsonl(out_dir / "per_task.jsonl", all_per_task)
+    write_json(out_dir / "summary.json", summary_payload)
+    flat_rows = (
+        flatten_summary(
+            summary_payload,
+            model_alias=args.model_alias,
+            subset=subset,
+            method=PP_METHOD,
+            extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
+        )
+        if args.n_runs == 1
+        else flatten_mean_std_summary(
+            summary_payload["mean_std"],
+            model_alias=args.model_alias,
+            subset=subset,
+            method=PP_METHOD,
+            extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
+        )
+    )
+    write_csv(out_dir / "summary_table.csv", flat_rows)
+    write_json(out_dir / "manifest.json", {"params": params, "summary": summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {}))})
+    return summary_payload
+
+
 def evaluate_case(
     args: argparse.Namespace,
     *,
@@ -192,7 +278,7 @@ def evaluate_case(
     model_path: Path,
     model_dataset: Path,
     w2t_utils: Any,
-    w2t_model: Any,
+    agent: Any,
     tool_format: str,
 ) -> dict[str, Any]:
     features, meta_rows, feature_summary = load_test_features(root, args.model_alias, subset)
@@ -220,86 +306,186 @@ def evaluate_case(
         probe_manifest=read_json(probe_manifest_path) if probe_manifest_path.exists() else {},
         feature_summary=feature_summary,
     )
+    if args._worker_index >= 0:
+        params["data_parallel_worker"] = {"worker_index": args._worker_index, "num_workers": args._num_workers}
     expected = [out_dir / "summary.json", out_dir / "per_task.jsonl", out_dir / "outputs.json"]
     if should_skip(out_dir, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "outputs")):
         return read_json(out_dir / "summary.json")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(out_dir / "probe_predictions.jsonl", flatten_probe_predictions(meta_rows, probabilities, threshold=threshold))
-    write_json(out_dir / "prefills.json", prefills)
-    write_json(out_dir / "prefill_stats.json", prefill_stats)
+    run_outputs: dict[str, list[dict[str, Any]]] = {}
+    all_per_task: list[dict[str, Any]] = []
+    for run_id in range(args.n_runs):
+        print(f"{subset}/{tag}: Probe&Prefill evaluation run {run_id + 1}/{args.n_runs}")
+        outputs = evaluate_batched_with_task_progress(
+            w2t_utils,
+            tasks,
+            agent,
+            batch_size=args.batch_size,
+            desc=f"{subset}/{tag}/run{run_id + 1}",
+            max_rounds=args.max_rounds,
+            record_mode=args.record_mode,
+            prompt_mode="current",
+            require_reasoning=False,
+            prefills=prefills,
+            tool_format=tool_format,
+        )
+        per_task = build_per_task(outputs, w2t_utils, run_id=run_id)
+        run_outputs[f"run_{run_id}"] = outputs
+        all_per_task.extend(per_task)
 
-    agent = make_agent(args, model_path=model_path, w2t_model=w2t_model)
-    try:
-        run_outputs: dict[str, list[dict[str, Any]]] = {}
-        run_summaries: dict[str, dict[str, Any]] = {}
-        all_per_task = []
-        for run_id in range(args.n_runs):
-            print(f"{subset}/{tag}: Probe&Prefill evaluation run {run_id + 1}/{args.n_runs}")
-            outputs = w2t_utils.evaluate_batched(
-                tasks,
-                agent,
-                max_rounds=args.max_rounds,
-                record_mode=args.record_mode,
-                prompt_mode="current",
-                require_reasoning=False,
-                prefills=prefills,
+    summary_payload = write_case_outputs(
+        args,
+        subset=subset,
+        threshold=threshold,
+        prefill_mode=prefill_mode,
+        out_dir=out_dir,
+        features=features,
+        meta_rows=meta_rows,
+        probabilities=probabilities,
+        prefills=prefills,
+        prefill_stats=prefill_stats,
+        run_outputs=run_outputs,
+        all_per_task=all_per_task,
+        params=params,
+    )
+    print(f"Wrote Probe&Prefill evaluation: {out_dir}")
+    return summary_payload
+
+
+def merge_shard_outputs(
+    *,
+    args: argparse.Namespace,
+    subset: str,
+    threshold: float,
+    prefill_mode: str,
+    root: Path,
+    worker_roots: list[Path],
+    model_path: Path,
+    tool_format: str,
+) -> dict[str, Any]:
+    features, meta_rows, feature_summary = load_test_features(root, args.model_alias, subset)
+    probe_path = probe_dir(root, args.model_alias, subset) / "probe_no_reasoning.pt"
+    probe_manifest_path = probe_dir(root, args.model_alias, subset) / "manifest.json"
+    probabilities = probe_probabilities(load_probe(probe_path), features, args.temperature)
+    prefills, prefill_stats = compute_prefills(
+        task_ids=[str(row["id"]) for row in meta_rows],
+        probabilities=probabilities,
+        threshold=threshold,
+        prefill_mode=prefill_mode,
+        tool_format=tool_format,
+    )
+    params = expected_params(
+        args,
+        subset=subset,
+        threshold=threshold,
+        prefill_mode=prefill_mode,
+        tool_format=tool_format,
+        model_path=model_path,
+        probe_manifest=read_json(probe_manifest_path) if probe_manifest_path.exists() else {},
+        feature_summary=feature_summary,
+    )
+    params["data_parallel"] = {"num_workers": len(worker_roots), "gpus": parse_gpus(args.gpus)}
+    tag = tag_for(threshold, args.temperature, prefill_mode)
+    task_ids = [str(row["id"]) for row in meta_rows]
+    run_outputs: dict[str, list[dict[str, Any]]] = {}
+    all_per_task: list[dict[str, Any]] = []
+    for run_id in range(args.n_runs):
+        merged_outputs: list[dict[str, Any]] = []
+        merged_per_task: list[dict[str, Any]] = []
+        for worker_root in worker_roots:
+            shard_dir = output_dir(worker_root, args.model_alias, subset, tag)
+            payload = read_json(shard_dir / "outputs.json")
+            outputs = payload if args.n_runs == 1 else payload[f"run_{run_id}"]
+            per_task = [row for row in read_jsonl(shard_dir / "per_task.jsonl") if int(row.get("run_id", 0)) == run_id]
+            merged_outputs.extend(outputs)
+            merged_per_task.extend(per_task)
+        run_outputs[f"run_{run_id}"] = sort_records_by_task_ids(merged_outputs, task_ids)
+        all_per_task.extend(sort_records_by_task_ids(merged_per_task, task_ids))
+    return write_case_outputs(
+        args,
+        subset=subset,
+        threshold=threshold,
+        prefill_mode=prefill_mode,
+        out_dir=output_dir(root, args.model_alias, subset, tag),
+        features=features,
+        meta_rows=meta_rows,
+        probabilities=probabilities,
+        prefills=prefills,
+        prefill_stats=prefill_stats,
+        run_outputs=run_outputs,
+        all_per_task=all_per_task,
+        params=params,
+    )
+
+
+def run_data_parallel(
+    args: argparse.Namespace,
+    *,
+    root: Path,
+    model_path: Path,
+    model_dataset: Path,
+    tool_format: str,
+    prefill_mode: str,
+    thresholds: list[float],
+) -> dict[str, Any]:
+    gpus = parse_gpus(args.gpus)
+    root_manifest: dict[str, Any] = {
+        "stage": "pp_03_probe_prefill_evaluation",
+        "stage_version": PP_STAGE_VERSION,
+        "model_alias": args.model_alias,
+        "tool_format": tool_format,
+        "prefill_mode": prefill_mode,
+        "data_parallel": {"num_workers": len(gpus), "gpus": gpus},
+        "subsets": {},
+    }
+    for subset in subset_values(args.subset):
+        _features, meta_rows, _summary = load_test_features(root, args.model_alias, subset)
+        shard_sets = shard_indices(len(meta_rows), len(gpus))
+        run_root = make_dp_run_root(root, stage="pp_03", model_alias=args.model_alias, subset=subset)
+        worker_roots: list[Path] = []
+        for index, indices in enumerate(shard_sets):
+            worker_root = run_root / f"shard_{index:02d}"
+            prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+            prepare_feature_tensor_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+            copy_probe_artifacts(root, worker_root, model_alias=args.model_alias, subset=subset)
+            worker_roots.append(worker_root)
+        total = len(meta_rows) * args.n_runs * len(thresholds)
+        run_data_parallel_workers(
+            script_path=Path(__file__).resolve(),
+            args=args,
+            gpus=gpus,
+            subset=subset,
+            worker_roots=worker_roots,
+            total_progress=total,
+            desc=f"PP-3 {args.model_alias}/{subset}",
+        )
+        root_manifest["subsets"][subset] = {}
+        for threshold in thresholds:
+            summary = merge_shard_outputs(
+                args=args,
+                subset=subset,
+                threshold=threshold,
+                prefill_mode=prefill_mode,
+                root=root,
+                worker_roots=worker_roots,
+                model_path=model_path,
                 tool_format=tool_format,
             )
-            per_task = build_per_task(outputs, w2t_utils, run_id=run_id)
-            summary = build_summary(per_task)
-            run_outputs[f"run_{run_id}"] = outputs
-            run_summaries[f"run_{run_id}"] = summary
-            all_per_task.extend(per_task)
-
-        outputs_payload: Any = run_outputs["run_0"] if args.n_runs == 1 else run_outputs
-        summary_payload: dict[str, Any] = (
-            run_summaries["run_0"]
-            if args.n_runs == 1
-            else {"runs": run_summaries, "mean_std": aggregate_run_summaries(list(run_summaries.values()))}
-        )
-        summary_payload["config"] = {
-            "threshold": threshold,
-            "temperature": args.temperature,
-            "prefill_mode": prefill_mode,
-            "prefill_stats": prefill_stats,
-            "probe_feature_dim": int(features.shape[1]),
-        }
-        write_json(out_dir / "outputs.json", outputs_payload)
-        write_jsonl(out_dir / "per_task.jsonl", all_per_task)
-        write_json(out_dir / "summary.json", summary_payload)
-        flat_rows = (
-            flatten_summary(
-                summary_payload,
-                model_alias=args.model_alias,
-                subset=subset,
-                method=PP_METHOD,
-                extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
+            root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
+                "overall", summary.get("mean_std", {}).get("overall", {})
             )
-            if args.n_runs == 1
-            else flatten_mean_std_summary(
-                summary_payload["mean_std"],
-                model_alias=args.model_alias,
-                subset=subset,
-                method=PP_METHOD,
-                extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
-            )
-        )
-        write_csv(out_dir / "summary_table.csv", flat_rows)
-        write_json(out_dir / "manifest.json", {"params": params, "summary": summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {}))})
-        print(f"Wrote Probe&Prefill evaluation: {out_dir}")
-        return summary_payload
-    finally:
-        del agent
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
+    return root_manifest
 
 def main() -> None:
     args = parse_args()
     if args.n_runs < 1:
         raise ValueError("--n-runs must be >= 1")
+    # Keep task sharding, tool-call identifiers, and backend-independent
+    # stochastic operations reproducible; generation settings remain official.
+    set_single_process_cuda_visible(args.gpus)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     root = probe_prefill_root(args.output_root)
     dataset_root = resolve_path(args.dataset_dir) if args.dataset_dir else path_from_config("modified_dataset_dir")
     model_dataset = dataset_root / args.model_alias
@@ -311,33 +497,50 @@ def main() -> None:
     tool_format = infer_tool_format(args.model_alias, model_path)
     prefill_mode = default_prefill_mode(args.model_alias, tool_format) if args.prefill_mode == "auto" else args.prefill_mode
     thresholds = parse_thresholds(args.thresholds)
-    root_manifest: dict[str, Any] = {
-        "stage": "pp_03_probe_prefill_evaluation",
-        "stage_version": PP_STAGE_VERSION,
-        "model_alias": args.model_alias,
-        "tool_format": tool_format,
-        "prefill_mode": prefill_mode,
-        "subsets": {},
-    }
-
-    for subset in subset_values(args.subset):
-        root_manifest["subsets"][subset] = {}
-        for threshold in thresholds:
-            summary = evaluate_case(
-                args,
-                subset=subset,
-                threshold=threshold,
-                prefill_mode=prefill_mode,
-                root=root,
-                model_path=model_path,
-                model_dataset=model_dataset,
-                w2t_utils=w2t_utils,
-                w2t_model=w2t_model,
-                tool_format=tool_format,
-            )
-            root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
-                "overall", summary.get("mean_std", {}).get("overall", {})
-            )
+    if is_dp_parent(args):
+        root_manifest = run_data_parallel(
+            args,
+            root=root,
+            model_path=model_path,
+            model_dataset=model_dataset,
+            tool_format=tool_format,
+            prefill_mode=prefill_mode,
+            thresholds=thresholds,
+        )
+    else:
+        agent = make_agent(args, model_path=model_path, w2t_model=w2t_model)
+        try:
+            root_manifest = {
+                "stage": "pp_03_probe_prefill_evaluation",
+                "stage_version": PP_STAGE_VERSION,
+                "model_alias": args.model_alias,
+                "tool_format": tool_format,
+                "prefill_mode": prefill_mode,
+                "subsets": {},
+            }
+            for subset in subset_values(args.subset):
+                root_manifest["subsets"][subset] = {}
+                for threshold in thresholds:
+                    summary = evaluate_case(
+                        args,
+                        subset=subset,
+                        threshold=threshold,
+                        prefill_mode=prefill_mode,
+                        root=root,
+                        model_path=model_path,
+                        model_dataset=model_dataset,
+                        w2t_utils=w2t_utils,
+                        agent=agent,
+                        tool_format=tool_format,
+                    )
+                    root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
+                        "overall", summary.get("mean_std", {}).get("overall", {})
+                    )
+        finally:
+            del agent
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     manifest_path = pp_subdir(root, "outputs") / args.model_alias / "probe_prefill" / "manifest.json"
     write_json(manifest_path, root_manifest)

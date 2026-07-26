@@ -259,7 +259,7 @@ class VLLMAgentBackend:
         if prefills:
             prompts = [p + (pf or "") for p, pf in zip(prompts, prefills)]
         params = self._sampling_params()
-        raw = self.llm.generate(prompts=prompts, sampling_params=params)
+        raw = self.llm.generate(prompts=prompts, sampling_params=params, use_tqdm=False)
 
         outs = []
         for idx, (prompt_text, r) in enumerate(zip(prompts, raw)):

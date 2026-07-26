@@ -765,7 +765,8 @@ def evaluate_batched(tasks, model, max_rounds=8, record_mode="lite", prompt_mode
             step_state(states[i], out, trace_item=trace_item)
 
         done = sum(1 for st in states if st["done"])
-        print(f"round {r}: active={len(active)} done={done}/{len(states)}")
+        if os.environ.get("WHEN2TOOL_QUIET_PROGRESS", "0") != "1":
+            print(f"round {r}: active={len(active)} done={done}/{len(states)}")
 
     return [finalize_state(st) for st in states]
 

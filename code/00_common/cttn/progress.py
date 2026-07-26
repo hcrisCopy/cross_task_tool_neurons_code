@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence, TypeVar
@@ -74,10 +75,20 @@ def evaluate_batched_with_task_progress(
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
-    for chunk in progress_chunks(tasks, batch_size, desc=desc, unit="task"):
+    emit_marker = os.environ.get("CTTN_PROGRESS_MARKER", "0") == "1"
+    chunks = range(0, len(tasks), max(1, int(batch_size)))
+    iterator = chunks if emit_marker else progress_chunks(tasks, batch_size, desc=desc, unit="task")
+    for item in iterator:
+        if emit_marker:
+            start = int(item)
+            chunk = tasks[start : start + max(1, int(batch_size))]
+        else:
+            chunk = item
         outputs.extend(w2t_utils.evaluate_batched(list(chunk), model, **kwargs))
         if tracker is not None:
             tracker.update(len(chunk))
+        if emit_marker:
+            print(f"CTTN_PROGRESS +{len(chunk)}", flush=True)
     return outputs
 
 

@@ -3,8 +3,18 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
+import queue
 import random
+import re
+import shutil
+import subprocess
 import sys
+import threading
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -66,8 +76,20 @@ __all__ = [
     "write_csv",
     "write_json",
     "write_jsonl",
+    "copy_probe_artifacts",
+    "is_dp_parent",
+    "make_dp_run_root",
+    "namespace_to_cli",
+    "parse_gpus",
+    "prepare_feature_meta_shard",
+    "prepare_feature_tensor_shard",
+    "run_data_parallel_workers",
+    "set_single_process_cuda_visible",
+    "shard_indices",
+    "shard_items",
+    "sort_records_by_task_ids",
+    "task_id",
 ]
-
 PREFILL_TEMPLATES = {
     "soft": {
         "xml": {
@@ -482,3 +504,211 @@ def remove_files(paths: Iterable[Path], *, allowed_root: Path) -> None:
                 clean_directory(path, root)
             else:
                 path.unlink()
+
+
+def parse_gpus(value: str | None) -> list[str]:
+    if value is None:
+        return ["0"]
+    gpus = [item.strip() for item in str(value).split(",") if item.strip()]
+    return gpus or ["0"]
+
+
+def is_dp_parent(args: Any) -> bool:
+    return int(getattr(args, "_worker_index", -1)) < 0 and len(parse_gpus(getattr(args, "gpus", "0"))) > 1
+
+
+def set_single_process_cuda_visible(gpus: str | None) -> None:
+    parsed = parse_gpus(gpus)
+    if len(parsed) == 1:
+        os.environ["CUDA_VISIBLE_DEVICES"] = parsed[0]
+
+
+def shard_indices(total: int, num_shards: int) -> list[list[int]]:
+    return [list(range(shard, total, num_shards)) for shard in range(num_shards)]
+
+
+def shard_items(items: list[Any], indices: list[int]) -> list[Any]:
+    return [items[idx] for idx in indices]
+
+
+def namespace_to_cli(args: Any, *, exclude: set[str] | None = None) -> list[str]:
+    excluded = set(exclude or set())
+    cli: list[str] = []
+    for key, value in vars(args).items():
+        if key.startswith("_") or key in excluded:
+            continue
+        option = "--" + key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                cli.append(option)
+        elif value is not None:
+            cli.extend([option, str(value)])
+    return cli
+
+
+def make_dp_run_root(root: Path, *, stage: str, model_alias: str, subset: str) -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    run_root = root / "_dp_shards" / stage / model_alias / subset / f"{stamp}_{os.getpid()}"
+    ensure_dir(run_root)
+    return run_root
+
+
+def prepare_feature_meta_shard(
+    src_root: Path,
+    dst_root: Path,
+    *,
+    model_alias: str,
+    subset: str,
+    indices: list[int],
+    split: str = "test",
+) -> list[dict[str, Any]]:
+    src_dir = pp_subdir(src_root, "features") / model_alias / subset
+    dst_dir = pp_subdir(dst_root, "features") / model_alias / subset
+    ensure_dir(dst_dir)
+    rows = read_jsonl(src_dir / f"{split}_meta.jsonl")
+    selected = shard_items(rows, indices)
+    write_jsonl(dst_dir / f"{split}_meta.jsonl", selected)
+    summary_path = src_dir / f"{split}_summary.json"
+    if summary_path.exists():
+        summary = read_json(summary_path)
+        summary["data_parallel_shard"] = {"size": len(selected), "source_size": len(rows)}
+        write_json(dst_dir / f"{split}_summary.json", summary)
+    return selected
+
+
+def prepare_feature_tensor_shard(
+    src_root: Path,
+    dst_root: Path,
+    *,
+    model_alias: str,
+    subset: str,
+    indices: list[int],
+    split: str = "test",
+) -> None:
+    src_dir = pp_subdir(src_root, "features") / model_alias / subset
+    dst_dir = pp_subdir(dst_root, "features") / model_alias / subset
+    ensure_dir(dst_dir)
+    payload_path = src_dir / f"{split}_features.pt"
+    if payload_path.exists():
+        payload = torch.load(payload_path, map_location="cpu", weights_only=False)
+        idx = torch.tensor(indices, dtype=torch.long)
+        payload = dict(payload)
+        payload["features"] = payload["features"].index_select(0, idx).contiguous()
+        torch.save(payload, dst_dir / f"{split}_features.pt")
+
+
+def copy_probe_artifacts(src_root: Path, dst_root: Path, *, model_alias: str, subset: str) -> None:
+    src = pp_subdir(src_root, "probes") / model_alias / subset
+    dst = pp_subdir(dst_root, "probes") / model_alias / subset
+    if not src.exists():
+        raise FileNotFoundError(f"Missing probe artifacts: {src}")
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+def task_id(record: dict[str, Any]) -> str:
+    for key in ("id", "task_id"):
+        if key in record:
+            return str(record[key])
+    raise KeyError(f"Cannot find task id in record keys: {sorted(record)}")
+
+
+def sort_records_by_task_ids(records: list[dict[str, Any]], task_ids: list[str]) -> list[dict[str, Any]]:
+    order = {str(task_id): idx for idx, task_id in enumerate(task_ids)}
+    return sorted(records, key=lambda row: order.get(task_id(row), len(order)))
+
+
+def run_data_parallel_workers(
+    *,
+    script_path: Path,
+    args: Any,
+    gpus: list[str],
+    subset: str,
+    worker_roots: list[Path],
+    total_progress: int,
+    desc: str,
+    extra_cli: list[str] | None = None,
+) -> None:
+    base_cli = namespace_to_cli(args, exclude={"gpus", "output_root", "subset"})
+    processes = []
+    lines: queue.Queue[tuple[int, str | None]] = queue.Queue()
+
+    def reader(index: int, pipe: Any) -> None:
+        try:
+            for line in iter(pipe.readline, ""):
+                lines.put((index, line.rstrip("\n")))
+        finally:
+            lines.put((index, None))
+
+    for index, (gpu, worker_root) in enumerate(zip(gpus, worker_roots)):
+        cmd = [
+            sys.executable,
+            str(script_path),
+            *base_cli,
+            "--subset",
+            subset,
+            "--output-root",
+            str(worker_root),
+            "--gpus",
+            gpu,
+            "--_worker-index",
+            str(index),
+            "--_num-workers",
+            str(len(gpus)),
+            *(extra_cli or []),
+        ]
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = gpu
+        env["PYTHONUNBUFFERED"] = "1"
+        env["OMP_NUM_THREADS"] = "1"
+        env["MKL_NUM_THREADS"] = "1"
+        env["TQDM_DISABLE"] = "1"
+        env["CTTN_PROGRESS_MARKER"] = "1"
+        env["WHEN2TOOL_QUIET_PROGRESS"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+            cwd=str(REPO_ROOT),
+        )
+        processes.append(proc)
+        threading.Thread(target=reader, args=(index, proc.stdout), daemon=True).start()  # type: ignore[arg-type]
+
+    marker = re.compile(r"CTTN_PROGRESS \+(\d+)")
+    finished = 0
+    last_lines: list[str] = []
+    try:
+        from tqdm.auto import tqdm as _tqdm
+    except ModuleNotFoundError:
+        _tqdm = None
+
+    bar = _tqdm(total=total_progress, desc=desc, unit="task", dynamic_ncols=True) if _tqdm else None
+    done = 0
+    while finished < len(processes):
+        index, line = lines.get()
+        if line is None:
+            finished += 1
+            continue
+        match = marker.search(line)
+        if match:
+            inc = int(match.group(1))
+            done += inc
+            if bar is not None:
+                bar.update(inc)
+            else:
+                print(f"{desc}: {done}/{total_progress}", flush=True)
+            continue
+        if line.strip():
+            rendered = f"[worker {index}] {line}"
+            last_lines.append(rendered)
+            last_lines = last_lines[-80:]
+            print(rendered, flush=True)
+    if bar is not None:
+        bar.close()
+
+    failed = [idx for idx, proc in enumerate(processes) if proc.wait() != 0]
+    if failed:
+        tail = "\n".join(last_lines[-30:])
+        raise RuntimeError(f"Data-parallel workers failed: {failed}\n{tail}")

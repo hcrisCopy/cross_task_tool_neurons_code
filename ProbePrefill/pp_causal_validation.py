@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import argparse
 import gc
+import os
 import statistics
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["WHEN2TOOL_QUIET_PROGRESS"] = "1"
+
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +20,11 @@ from pp_common import (
     PP_STAGE_VERSION,
     features_from_rows,
     grouped_classification_metrics,
+    is_dp_parent,
     infer_tool_format,
     load_ctd_rows,
+    make_dp_run_root,
+    parse_gpus,
     load_model_module,
     load_stage_activations,
     load_tdn_rows,
@@ -26,12 +34,17 @@ from pp_common import (
     private_rows,
     probe_prefill_root,
     read_json,
+    prepare_feature_meta_shard,
     read_jsonl,
     remove_files,
     resolve_model_path,
     resolve_path,
+    run_data_parallel_workers,
     sample_random_like_rows,
+    set_single_process_cuda_visible,
+    shard_indices,
     should_skip,
+    sort_records_by_task_ids,
     stable_sha256,
     subset_values,
     write_csv,
@@ -42,6 +55,7 @@ from pp_common import (
 from cttn.agent import HFGenerationAgent
 from cttn.data import TASK_TYPES
 from cttn.eval_metrics import build_per_task, build_summary
+from cttn.progress import evaluate_batched_with_task_progress
 from cttn.lora import sample_random_like
 from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 
@@ -72,6 +86,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--record-mode", choices=["full", "lite", "off"], default="lite")
+    parser.add_argument("--gpus", default="0", help="Comma-separated GPU ids. More than one GPU runs data-parallel activation-mask workers inside this script.")
+    parser.add_argument("--_worker-index", type=int, default=-1, help=argparse.SUPPRESS)
+    parser.add_argument("--_num-workers", type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument("--seed", **seed_arg_kwargs())
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
@@ -281,9 +298,12 @@ def evaluate_mask_case(
     args: argparse.Namespace,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     with agent.activation_mask(mask_rows):
-        outputs = w2t_utils.evaluate_batched(
+        outputs = evaluate_batched_with_task_progress(
+            w2t_utils,
             tasks,
             agent,
+            batch_size=args.batch_size,
+            desc="activation-mask",
             max_rounds=args.max_rounds,
             record_mode=args.record_mode,
             prompt_mode="current",
@@ -456,10 +476,238 @@ def run_activation_mask_validation(
             torch.cuda.empty_cache()
 
 
+
+def activation_mask_params(
+    args: argparse.Namespace,
+    *,
+    subset: str,
+    root: Path,
+    model_path: Path,
+    neurons_dir: Path,
+    tool_format: str,
+    feature_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    single_manifest = read_json(neurons_dir / args.model_alias / "single_type_by_subset" / subset / "manifest.json")
+    shared_manifest = read_json(neurons_dir / args.model_alias / "shared_by_subset" / subset / "manifest.json")
+    return {
+        "stage": "pp_05_activation_mask_validation",
+        "stage_version": PP_STAGE_VERSION,
+        "model_alias": args.model_alias,
+        "model_path": str(model_path),
+        "subset": subset,
+        "interventions": parse_interventions(args.interventions),
+        "batch_size": args.batch_size,
+        "max_rounds": args.max_rounds,
+        "max_new_tokens": args.max_new_tokens,
+        "max_model_len": args.max_model_len,
+        "torch_dtype": args.torch_dtype,
+        "device_map": args.device_map,
+        "record_mode": args.record_mode,
+        "seed": args.seed,
+        "random_mask_seed": derive_allowed_seed(args.seed, subset, "activation_mask"),
+        "prompt_mode": "current",
+        "reasoning_mode": "no_reasoning",
+        "enable_thinking": False,
+        "tool_format": tool_format,
+        "selected_test_ids_sha256": stable_sha256([row["id"] for row in feature_rows]),
+        "single_type_manifest_params": single_manifest.get("params", {}),
+        "shared_neuron_manifest_params": shared_manifest.get("params", {}),
+    }
+
+
+def write_activation_summary_tables(
+    *,
+    args: argparse.Namespace,
+    subset: str,
+    out_dir: Path,
+    summary_rows: list[dict[str, Any]],
+    ctd_rows: list[dict[str, Any]],
+    random_rows: list[dict[str, Any]],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    cross_by_intervention: dict[str, dict[str, Any]] = {}
+    for task_type in TASK_TYPES:
+        base_metrics = None
+        type_metrics: dict[str, dict[str, Any]] = {}
+        for row in summary_rows:
+            if row.get("task_type") != task_type:
+                continue
+            metrics = {key: value for key, value in row.items() if key not in {"model_alias", "subset", "task_type", "intervention", "masked_neurons"}}
+            type_metrics[str(row["intervention"])] = metrics
+            if row.get("intervention") == "Base":
+                base_metrics = metrics
+        if base_metrics is None:
+            continue
+        for intervention, metrics in type_metrics.items():
+            cross = cross_by_intervention.setdefault(intervention, {"delta_acc": [], "delta_tcr": [], "task_type_metrics": {}})
+            cross["delta_acc"].append(float(metrics["final_accuracy"]) - float(base_metrics["final_accuracy"]))
+            cross["delta_tcr"].append(float(metrics["tool_call_rate"]) - float(base_metrics["tool_call_rate"]))
+            cross["task_type_metrics"][task_type] = metrics
+
+    cross_rows = []
+    for intervention, payload in sorted(cross_by_intervention.items()):
+        deltas = payload["delta_acc"]
+        delta_tcr = payload["delta_tcr"]
+        row = {
+            "model_alias": args.model_alias,
+            "subset": subset,
+            "intervention": intervention,
+            "avg_delta_acc": sum(deltas) / len(deltas) if deltas else 0.0,
+            "var_acc": statistics.pvariance(deltas) if len(deltas) > 1 else 0.0,
+            "avg_delta_tcr": sum(delta_tcr) / len(delta_tcr) if delta_tcr else 0.0,
+        }
+        for task_type in TASK_TYPES:
+            metrics = payload["task_type_metrics"].get(task_type, {})
+            row[f"acc_{task_type}"] = metrics.get("final_accuracy")
+            row[f"tool_acc_{task_type}"] = metrics.get("decision_accuracy")
+            row[f"tcr_{task_type}"] = metrics.get("tool_call_rate")
+        cross_rows.append(row)
+
+    write_csv(out_dir / "summary_table.csv", summary_rows)
+    write_csv(out_dir / "cross_type_summary.csv", cross_rows)
+    manifest = {
+        "params": params,
+        "ctd_neuron_count": len(ctd_rows),
+        "random_neuron_count": len(random_rows),
+        "summary_rows": len(summary_rows),
+        "cross_rows": len(cross_rows),
+    }
+    write_json(out_dir / "activation_mask" / "manifest.json", manifest)
+    return manifest
+
+
+def merge_activation_mask_shards(
+    *,
+    args: argparse.Namespace,
+    subset: str,
+    root: Path,
+    worker_roots: list[Path],
+    model_path: Path,
+    model_dataset: Path,
+    neurons_dir: Path,
+    tool_format: str,
+) -> dict[str, Any]:
+    out_dir = causal_dir(root, args.model_alias, subset)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    feature_rows = feature_meta(root, args.model_alias, subset, "test")
+    ctd_rows = load_ctd_rows(neurons_dir, args.model_alias, subset)
+    first_random = causal_dir(worker_roots[0], args.model_alias, subset) / "random_mask_neurons.jsonl"
+    random_rows = read_jsonl(first_random) if first_random.exists() else []
+    if random_rows:
+        write_jsonl(out_dir / "random_mask_neurons.jsonl", random_rows)
+    params = activation_mask_params(
+        args,
+        subset=subset,
+        root=root,
+        model_path=model_path,
+        neurons_dir=neurons_dir,
+        tool_format=tool_format,
+        feature_rows=feature_rows,
+    )
+    params["data_parallel"] = {"num_workers": len(worker_roots), "gpus": parse_gpus(args.gpus)}
+
+    summary_rows: list[dict[str, Any]] = []
+    interventions = parse_interventions(args.interventions)
+    for task_type in TASK_TYPES:
+        tasks = tasks_for_feature_meta(model_dataset, subset, feature_rows, task_type=task_type)
+        if not tasks:
+            continue
+        task_ids = [str(task["id"]) for task in tasks]
+        tdn_rows = load_tdn_rows(neurons_dir, args.model_alias, subset, task_type)
+        for intervention in interventions:
+            case_dir = out_dir / task_type / intervention
+            case_dir.mkdir(parents=True, exist_ok=True)
+            merged_outputs: list[dict[str, Any]] = []
+            merged_per_task: list[dict[str, Any]] = []
+            for worker_root in worker_roots:
+                shard_case = causal_dir(worker_root, args.model_alias, subset) / task_type / intervention
+                if not (shard_case / "outputs.json").exists():
+                    continue
+                merged_outputs.extend(read_json(shard_case / "outputs.json"))
+                merged_per_task.extend(read_jsonl(shard_case / "per_task.jsonl"))
+            merged_outputs = sort_records_by_task_ids(merged_outputs, task_ids)
+            merged_per_task = sort_records_by_task_ids(merged_per_task, task_ids)
+            summary = build_summary(merged_per_task)
+            write_json(case_dir / "outputs.json", merged_outputs)
+            write_jsonl(case_dir / "per_task.jsonl", merged_per_task)
+            write_json(case_dir / "summary.json", summary)
+            metrics = summary["overall"]
+            mask_rows = intervention_rows(
+                intervention,
+                task_type=task_type,
+                tdn_rows=tdn_rows,
+                ctd_rows=ctd_rows,
+                random_rows=random_rows,
+            )
+            row = {
+                "model_alias": args.model_alias,
+                "subset": subset,
+                "task_type": task_type,
+                "intervention": intervention,
+                "masked_neurons": len(mask_rows),
+            }
+            row.update(metrics)
+            summary_rows.append(row)
+    return write_activation_summary_tables(
+        args=args,
+        subset=subset,
+        out_dir=out_dir,
+        summary_rows=summary_rows,
+        ctd_rows=ctd_rows,
+        random_rows=random_rows,
+        params=params,
+    )
+
+
+def run_activation_mask_data_parallel(
+    args: argparse.Namespace,
+    *,
+    subset: str,
+    root: Path,
+    model_path: Path,
+    model_dataset: Path,
+    neurons_dir: Path,
+    tool_format: str,
+) -> dict[str, Any]:
+    gpus = parse_gpus(args.gpus)
+    feature_rows = feature_meta(root, args.model_alias, subset, "test")
+    shard_sets = shard_indices(len(feature_rows), len(gpus))
+    run_root = make_dp_run_root(root, stage="pp_05_activation_mask", model_alias=args.model_alias, subset=subset)
+    worker_roots: list[Path] = []
+    for index, indices in enumerate(shard_sets):
+        worker_root = run_root / f"shard_{index:02d}"
+        prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+        worker_roots.append(worker_root)
+    interventions = parse_interventions(args.interventions)
+    total = sum(len(tasks_for_feature_meta(model_dataset, subset, feature_rows, task_type=task_type)) for task_type in TASK_TYPES)
+    run_data_parallel_workers(
+        script_path=Path(__file__).resolve(),
+        args=args,
+        gpus=gpus,
+        subset=subset,
+        worker_roots=worker_roots,
+        total_progress=total * len(interventions),
+        desc=f"PP-5 {args.model_alias}/{subset}",
+        extra_cli=["--skip-probe-controls"],
+    )
+    return merge_activation_mask_shards(
+        args=args,
+        subset=subset,
+        root=root,
+        worker_roots=worker_roots,
+        model_path=model_path,
+        model_dataset=model_dataset,
+        neurons_dir=neurons_dir,
+        tool_format=tool_format,
+    )
+
 def main() -> None:
     args = parse_args()
     if args.reg <= 0:
         raise ValueError("--reg must be positive")
+    set_single_process_cuda_visible(args.gpus)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     root = probe_prefill_root(args.output_root)
     activations_dir = resolve_path(args.activations_dir) if args.activations_dir else path_from_config("activations_dir")
     neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else path_from_config("neurons_dir")
@@ -490,17 +738,28 @@ def main() -> None:
                 neurons_dir=neurons_dir,
             )
         if not args.skip_activation_mask:
-            subset_manifest["activation_mask"] = run_activation_mask_validation(
-                args,
-                subset=subset,
-                root=root,
-                model_path=model_path,
-                model_dataset=model_dataset,
-                neurons_dir=neurons_dir,
-                w2t_utils=w2t_utils,
-                w2t_model=w2t_model,
-                tool_format=tool_format,
-            )
+            if is_dp_parent(args):
+                subset_manifest["activation_mask"] = run_activation_mask_data_parallel(
+                    args,
+                    subset=subset,
+                    root=root,
+                    model_path=model_path,
+                    model_dataset=model_dataset,
+                    neurons_dir=neurons_dir,
+                    tool_format=tool_format,
+                )
+            else:
+                subset_manifest["activation_mask"] = run_activation_mask_validation(
+                    args,
+                    subset=subset,
+                    root=root,
+                    model_path=model_path,
+                    model_dataset=model_dataset,
+                    neurons_dir=neurons_dir,
+                    w2t_utils=w2t_utils,
+                    w2t_model=w2t_model,
+                    tool_format=tool_format,
+                )
         root_manifest["subsets"][subset] = subset_manifest
 
     manifest_path = pp_subdir(root, "causal") / args.model_alias / "manifest.json"
