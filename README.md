@@ -276,10 +276,10 @@ python code/05_single_type_discovery/discover_single_type_neurons.py --model-ali
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/scar_scores.pt
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/summary.json
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/manifest.json
-../cross_task_tool_neurons_data/visualizations/<model_alias>/single_type_by_subset/layer_top3pct_scar_heatmap_<subset>_<A|B|C>.png
+../cross_task_tool_neurons_data/visualizations/<model_alias>/single_type_by_subset/layer_top1pct_scar_heatmap_<subset>_<A|B|C>.png
 ```
 
-方法：只读 train activation。A/B/C 各自把 `tool_necessary=1` 和 `0` 分成两组，按 SCAR 分数在全模型 FFN 坐标里取 `top_k=5000`。新增的 `layer_top3pct_scar_heatmap` 按 `layer + gate_proj/up_proj/down_proj` 分行，展示每层每个 FFN module 内 SCAR 前 3% 神经元的分数。
+方法：只读 train activation。A/B/C 各自把 `tool_necessary=1` 和 `0` 分成两组，按 SCAR 分数在全模型 FFN 坐标里取 `top_k=5000`。新增的 `layer_top1pct_scar_heatmap` 按 `layer + gate_proj/up_proj/down_proj` 分行，展示每层每个 FFN module 内 SCAR 前 1% 神经元的分数。
 
 ## 阶段 6：跨任务类型共享神经元
 

@@ -30,7 +30,7 @@ from cttn.paths import ensure_dir
 from cttn.progress import progress
 
 
-LAYER_TOP_SCORE_RATIO = 0.03
+LAYER_TOP_SCORE_RATIO = 0.01
 HARDWARE_ONLY_PARAM_KEYS = {"device"}
 
 
@@ -350,18 +350,37 @@ def expected_viz(viz_dir: Path, subset: str) -> list[Path]:
     return (
         [viz_dir / f"{subset}_ps_density_heatmap.png"]
         + [viz_dir / f"ps_tdn_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
-        + [viz_dir / f"ps_layer_top3pct_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+        + [viz_dir / f"ps_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
     )
 
 
-def expected_layer_top3pct_viz(viz_dir: Path, subset: str) -> list[Path]:
-    return [viz_dir / f"ps_layer_top3pct_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+def expected_layer_top1pct_viz(viz_dir: Path, subset: str) -> list[Path]:
+    return [viz_dir / f"ps_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+
+
+def legacy_layer_top_viz(viz_dir: Path, subset: str) -> list[Path]:
+    patterns = [
+        "ps_layer_top3pct_saliency_heatmap_{subset}_{task_type}.png",
+        "ps_layer_top10_saliency_heatmap_{subset}_{task_type}.png",
+    ]
+    return [
+        viz_dir / pattern.format(subset=subset, task_type=task_type)
+        for pattern in patterns
+        for task_type in TASK_TYPES
+    ]
+
+
+def clean_legacy_layer_top_viz(viz_dir: Path, subset: str) -> None:
+    for path in legacy_layer_top_viz(viz_dir, subset):
+        if path.exists():
+            path.unlink()
 
 
 def clean_viz(viz_dir: Path, subset: str) -> None:
     for path in expected_viz(viz_dir, subset):
         if path.exists():
             path.unlink()
+    clean_legacy_layer_top_viz(viz_dir, subset)
 
 
 def params_match_or_hardware_compatible(existing: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -385,44 +404,52 @@ def can_backfill_from_scores(subset_dir: Path, params: dict[str, Any]) -> bool:
     return all(path.exists() for path in expected)
 
 
-def backfill_layer_top3pct_visualizations(
+def backfill_layer_top1pct_visualizations(
     *,
     subset_dir: Path,
     viz_dir: Path,
     subset: str,
     params: dict[str, Any],
 ) -> bool:
-    target_paths = expected_layer_top3pct_viz(viz_dir, subset)
+    target_paths = expected_layer_top1pct_viz(viz_dir, subset)
     if all(path.exists() for path in target_paths):
+        clean_legacy_layer_top_viz(viz_dir, subset)
         return False
     if not can_backfill_from_scores(subset_dir, params):
         return False
 
-    layer_top3pct_paths: dict[str, str] = {}
+    clean_legacy_layer_top_viz(viz_dir, subset)
+    layer_top1pct_paths: dict[str, str] = {}
     for task_type in TASK_TYPES:
         scores_payload = torch.load(subset_dir / task_type / "saliency_scores.pt", map_location="cpu")
-        out_path = viz_dir / f"ps_layer_top3pct_saliency_heatmap_{subset}_{task_type}.png"
+        out_path = viz_dir / f"ps_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png"
         plot_layer_top_saliency_heatmap(
             score_pack=scores_payload["scores"],
             module_meta=scores_payload["module_meta"],
             out_path=out_path,
             score_field="call_saliency",
             score_label="PreciseShield call saliency",
-            title=f"{subset} Type {task_type}: top 3% PS saliency by layer",
+            title=f"{subset} Type {task_type}: top 1% PS saliency by layer",
         )
-        layer_top3pct_paths[task_type] = str(out_path)
+        layer_top1pct_paths[task_type] = str(out_path)
 
     summary_path = subset_dir / "summary.json"
     manifest_path = subset_dir / "manifest.json"
     summary = read_json(summary_path) if summary_path.exists() else {"subset": subset}
-    summary.setdefault("visualizations", {})
-    summary["visualizations"]["layer_top3pct_saliency_heatmaps"] = layer_top3pct_paths
+    visualizations = summary.setdefault("visualizations", {})
+    visualizations.pop("layer_top3pct_saliency_heatmaps", None)
+    visualizations.pop("layer_top10_saliency_heatmaps", None)
+    visualizations["layer_top1pct_saliency_heatmaps"] = layer_top1pct_paths
     write_json(summary_path, summary)
     manifest = read_json(manifest_path)
     manifest["params"] = params
     manifest["summary"] = summary
+    manifest.setdefault("visualizations", {})
+    manifest["visualizations"].pop("layer_top3pct_saliency_heatmaps", None)
+    manifest["visualizations"].pop("layer_top10_saliency_heatmaps", None)
+    manifest["visualizations"].update(summary["visualizations"])
     write_json(manifest_path, manifest)
-    print(f"Backfilled layer top-3% PreciseShield saliency visualizations: {subset_dir}")
+    print(f"Backfilled layer top-1% PreciseShield saliency visualizations: {subset_dir}")
     return True
 
 
@@ -489,7 +516,7 @@ def main() -> None:
             clean=args.clean,
         ):
             continue
-        if (not args.overwrite) and (not args.clean) and backfill_layer_top3pct_visualizations(
+        if (not args.overwrite) and (not args.clean) and backfill_layer_top1pct_visualizations(
             subset_dir=subset_dir,
             viz_dir=viz_dir,
             subset=subset,
@@ -502,7 +529,7 @@ def main() -> None:
         module_meta = payload["module_meta"]
         rows_by_type: dict[str, list[dict[str, Any]]] = {}
         summary = {"subset": subset, "task_types": {}, "visualizations": {}}
-        layer_top3pct_saliency_heatmaps: dict[str, str] = {}
+        layer_top1pct_saliency_heatmaps: dict[str, str] = {}
 
         for task_type in TASK_TYPES:
             rows, type_summary, score_pack = selected_rows_for_type(
@@ -533,25 +560,25 @@ def main() -> None:
             write_json(out_dir / "summary.json", type_summary)
             heatmap_path = viz_dir / f"ps_tdn_saliency_heatmap_{subset}_{task_type}.png"
             plot_saliency_rows(rows, heatmap_path, args.heatmap_top_n, f"{subset} Type {task_type} PS-TDN")
-            layer_top3pct_path = viz_dir / f"ps_layer_top3pct_saliency_heatmap_{subset}_{task_type}.png"
+            layer_top1pct_path = viz_dir / f"ps_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png"
             plot_layer_top_saliency_heatmap(
                 score_pack=score_pack,
                 module_meta=module_meta,
-                out_path=layer_top3pct_path,
+                out_path=layer_top1pct_path,
                 score_field="call_saliency",
                 score_label="PreciseShield call saliency",
-                title=f"{subset} Type {task_type}: top 3% PS saliency by layer",
+                title=f"{subset} Type {task_type}: top 1% PS saliency by layer",
             )
             type_summary["saliency_heatmap"] = str(heatmap_path)
-            type_summary["layer_top3pct_saliency_heatmap"] = str(layer_top3pct_path)
-            layer_top3pct_saliency_heatmaps[task_type] = str(layer_top3pct_path)
+            type_summary["layer_top1pct_saliency_heatmap"] = str(layer_top1pct_path)
+            layer_top1pct_saliency_heatmaps[task_type] = str(layer_top1pct_path)
             summary["task_types"][task_type] = type_summary
             print(f"{subset}/type {task_type}: selected {len(rows)} PS-TDN neurons")
 
         density_path = viz_dir / f"{subset}_ps_density_heatmap.png"
         plot_density(rows_by_type, module_meta, density_path)
         summary["visualizations"]["density_heatmap"] = str(density_path)
-        summary["visualizations"]["layer_top3pct_saliency_heatmaps"] = layer_top3pct_saliency_heatmaps
+        summary["visualizations"]["layer_top1pct_saliency_heatmaps"] = layer_top1pct_saliency_heatmaps
         write_json(subset_dir / "module_meta.json", module_meta)
         write_json(subset_dir / "summary.json", summary)
         write_json(subset_dir / "manifest.json", {"params": params, "summary": summary})
