@@ -74,6 +74,7 @@ __all__ = [
     "stable_sha256",
     "subset_values",
     "summarize_labels",
+    "validate_records_cover_task_ids",
     "write_csv",
     "write_json",
     "write_jsonl",
@@ -637,6 +638,26 @@ def task_id(record: dict[str, Any]) -> str:
 def sort_records_by_task_ids(records: list[dict[str, Any]], task_ids: list[str]) -> list[dict[str, Any]]:
     order = {str(task_id): idx for idx, task_id in enumerate(task_ids)}
     return sorted(records, key=lambda row: order.get(task_id(row), len(order)))
+
+
+def validate_records_cover_task_ids(records: list[dict[str, Any]], task_ids: list[str], *, label: str) -> None:
+    expected = Counter(str(item) for item in task_ids)
+    got_ids: list[str] = []
+    for index, record in enumerate(records):
+        try:
+            got_ids.append(task_id(record))
+        except KeyError as exc:
+            raise ValueError(f"{label}: record {index} is missing id/task_id") from exc
+    got = Counter(got_ids)
+    if got == expected:
+        return
+    missing = list((expected - got).elements())[:10]
+    extra = list((got - expected).elements())[:10]
+    raise RuntimeError(
+        f"{label}: merged records do not cover expected test ids exactly "
+        f"(expected={sum(expected.values())}, got={sum(got.values())}, "
+        f"missing_sample={missing}, extra_sample={extra})"
+    )
 
 
 def run_data_parallel_workers(

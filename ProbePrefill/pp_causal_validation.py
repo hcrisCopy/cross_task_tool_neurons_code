@@ -47,6 +47,7 @@ from pp_common import (
     should_skip,
     sort_records_by_task_ids,
     stable_sha256,
+    validate_records_cover_task_ids,
     write_csv,
     write_json,
     write_jsonl,
@@ -643,6 +644,8 @@ def merge_activation_mask_shards(
                 merged_per_task.extend(read_jsonl(shard_case / "per_task.jsonl"))
             merged_outputs = sort_records_by_task_ids(merged_outputs, task_ids)
             merged_per_task = sort_records_by_task_ids(merged_per_task, task_ids)
+            validate_records_cover_task_ids(merged_outputs, task_ids, label=f"PP-5 {args.model_alias}/{subset}/{task_type}/{intervention} outputs")
+            validate_records_cover_task_ids(merged_per_task, task_ids, label=f"PP-5 {args.model_alias}/{subset}/{task_type}/{intervention} per_task")
             summary = build_summary(merged_per_task)
             write_json(case_dir / "outputs.json", merged_outputs)
             write_jsonl(case_dir / "per_task.jsonl", merged_per_task)

@@ -44,6 +44,7 @@ from pp_common import (
     should_skip,
     sigmoid_temperature,
     sort_records_by_task_ids,
+    validate_records_cover_task_ids,
     write_json,
     write_jsonl,
 )
@@ -428,8 +429,12 @@ def merge_shard_outputs(
             per_task = [row for row in read_jsonl(shard_dir / "per_task.jsonl") if int(row.get("run_id", 0)) == run_id]
             merged_outputs.extend(outputs)
             merged_per_task.extend(per_task)
-        run_outputs[f"run_{run_id}"] = sort_records_by_task_ids(merged_outputs, task_ids)
-        all_per_task.extend(sort_records_by_task_ids(merged_per_task, task_ids))
+        sorted_outputs = sort_records_by_task_ids(merged_outputs, task_ids)
+        sorted_per_task = sort_records_by_task_ids(merged_per_task, task_ids)
+        validate_records_cover_task_ids(sorted_outputs, task_ids, label=f"PP-3 {args.model_alias}/{subset}/{tag}/run{run_id} outputs")
+        validate_records_cover_task_ids(sorted_per_task, task_ids, label=f"PP-3 {args.model_alias}/{subset}/{tag}/run{run_id} per_task")
+        run_outputs[f"run_{run_id}"] = sorted_outputs
+        all_per_task.extend(sorted_per_task)
     return write_case_outputs(
         args,
         subset=subset,
