@@ -584,6 +584,7 @@ def write_eval_case_report(
     comparison_thresholds: list[float] | None = None,
     comparison_temperature: float | None = None,
 ) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
     overall = section_metrics(summary, "overall")
     ref = paper_eval_reference(model_alias, subset, threshold, prefill_mode or "") if threshold is not None else None
     lines = [
