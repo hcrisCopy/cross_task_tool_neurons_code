@@ -30,6 +30,7 @@ from pp_common import (
     load_tdn_rows,
     load_utils,
     path_from_config,
+    print_subset_plan,
     pp_subdir,
     private_rows,
     probe_prefill_root,
@@ -46,7 +47,6 @@ from pp_common import (
     should_skip,
     sort_records_by_task_ids,
     stable_sha256,
-    subset_values,
     write_csv,
     write_json,
     write_jsonl,
@@ -767,7 +767,7 @@ def main() -> None:
         "tool_format": tool_format,
         "subsets": {},
     }
-    for subset in subset_values(args.subset):
+    for subset in print_subset_plan(args.subset, stage="PP-5", model_alias=args.model_alias):
         subset_manifest: dict[str, Any] = {}
         if not args.skip_probe_controls:
             subset_manifest["probe_controls"] = run_probe_controls(

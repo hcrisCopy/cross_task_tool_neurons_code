@@ -12,6 +12,7 @@ from pp_common import (
     load_ctd_rows,
     load_stage_activations,
     path_from_config,
+    print_subset_plan,
     pp_subdir,
     probe_prefill_root,
     read_json,
@@ -19,7 +20,6 @@ from pp_common import (
     select_meta_indices,
     should_skip,
     stable_sha256,
-    subset_values,
     summarize_labels,
     write_json,
     write_jsonl,
@@ -160,7 +160,7 @@ def main() -> None:
     neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else path_from_config("neurons_dir")
     root = probe_prefill_root(args.output_root)
     features_root = pp_subdir(root, "features")
-    subsets = subset_values(args.subset)
+    subsets = print_subset_plan(args.subset, stage="PP-1", model_alias=args.model_alias)
     root_manifest: dict[str, Any] = {
         "stage": "pp_01_build_ctd_probe_features",
         "stage_version": PP_STAGE_VERSION,

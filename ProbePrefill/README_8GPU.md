@@ -3,7 +3,9 @@
 本文件只给 `python ...` 运行指令。所有路径由项目配置和脚本默认相对路径解析，不写平台路径，不使用额外脚本文件。
 
 核心规则：
-- single_hop 和 multi_hop 分开跑，先 single_hop，再 multi_hop。
+- 每个阶段只需要复制一条命令。
+- `--subset all` 会在同一条命令里按顺序执行：先 `single_hop`，完成后再 `multi_hop`。
+- single-hop 和 multi-hop 的输出目录、summary、delta 仍然分开，不混合统计。
 - PP-3、PP-4、PP-5 使用数据并行：`--gpus 0,1,2,3,4,5,6,7` 会启动 8 个 worker，每张卡一个进程、加载一份完整模型、评测约 1/8 的 test 题目。
 - `--tensor-parallel-size 1` 保持不变；这里不是 tensor parallel，而是题目维度的数据并行。
 - 父进程会打印 GPU 列表、每卡 shard 大小、总题目进度，并汇总 worker 进度条；不使用 wandb。
@@ -17,62 +19,38 @@
 
 ## 运行顺序
 
-推荐按下面顺序执行：
+推荐按下面 5 条命令依次执行。每条命令内部都会先跑 `single_hop`，再跑 `multi_hop`。
 
 ```text
-PP-1 single_hop -> PP-1 multi_hop -> PP-2 single_hop -> PP-2 multi_hop -> PP-3 single_hop -> PP-3 multi_hop -> PP-4 single_hop -> PP-4 multi_hop -> PP-5 single_hop -> PP-5 multi_hop
+PP-1 -> PP-2 -> PP-3 -> PP-4 -> PP-5
 ```
 
 PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP-4。
 
 ## PP-1 构建全量 CTD Probe 特征
 
-PP-1 只读取阶段 4 activation、阶段 6 CTD 神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。
-
-single-hop：
+PP-1 只读取阶段 4 activation、阶段 6 CTD 神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset single_hop --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
-```
-
-multi-hop：
-
-```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset multi_hop --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 ## PP-2 训练 CTD Logistic Probe
 
 PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。
 
-single-hop：
-
 ```text
-python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset single_hop --reg 10000 --max-iter 2000 --threshold 0.5
-```
-
-multi-hop：
-
-```text
-python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset multi_hop --reg 10000 --max-iter 2000 --threshold 0.5
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 终端打印按论文表格版式：`ours` / `when2tool` 两行对比。single-hop 会额外打印 easy/medium/hard AUROC。
 
 ## PP-3 Probe&Prefill 评测（八卡）
 
-PP-3 只评测 test。每个 tau 下，8 张卡按题目切分并行生成；父进程合并后打印 `Acc / TC / AvgTC` 的 `ours` / `when2tool` 两行对比。
-
-single-hop：
+PP-3 只评测 test。每个 subset、每个 tau 下，8 张卡按题目切分并行生成；父进程合并后打印 `Acc / TC / AvgTC` 的 `ours` / `when2tool` 两行对比。
 
 ```text
-python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --subset single_hop --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
-```
-
-multi-hop：
-
-```text
-python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --subset multi_hop --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
+python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --subset all --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
 ```
 
 保存但不在终端主表混排：工具决策诊断、token cost、完整分组、`threshold_sweep_summary.csv`、`threshold_tradeoff.png`。
@@ -81,16 +59,8 @@ python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --s
 
 PP-4 先确保同口径 Base/Default test 结果存在；Base 已完成且参数一致时会提前跳过，不重新加载 8 个模型。delta 只读取 Base summary 和 PP-3 summary 计算。
 
-single-hop：
-
 ```text
-python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --subset single_hop --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
-```
-
-multi-hop：
-
-```text
-python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --subset multi_hop --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
+python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --subset all --thresholds 0.1,0.3,0.5,0.7,0.9 --temperature 2.0 --prefill-mode auto --backend vllm --n-runs 3 --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --tensor-parallel-size 1 --vllm-dtype bfloat16 --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
 ```
 
 终端主表只打印论文 delta 指标：
@@ -105,16 +75,8 @@ DeltaAcc(pp), DeltaTC(avg), DeltaAcc/-DeltaTC
 
 PP-5 的 probe 控制不加载生成模型；activation-mask 部分使用八卡数据并行。若 activation-mask 已完成且参数一致，会提前跳过 worker 启动。
 
-single-hop：
-
 ```text
-python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --subset single_hop --reg 10000 --max-iter 2000 --threshold 0.5 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
-```
-
-multi-hop：
-
-```text
-python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --subset multi_hop --reg 10000 --max-iter 2000 --threshold 0.5 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
+python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --max-iter 2000 --threshold 0.5 --interventions Base,Mask-Random,Mask-TDN_c,Mask-CTD,Mask-Private_c --batch-size 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --torch-dtype bfloat16 --device-map auto --record-mode lite --seed 2026 --gpus 0,1,2,3,4,5,6,7
 ```
 
 ## 换模型

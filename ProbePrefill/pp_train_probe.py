@@ -14,12 +14,12 @@ from pp_common import (
     flatten_probe_predictions,
     grouped_classification_metrics,
     pp_subdir,
+    print_subset_plan,
     probe_prefill_root,
     read_json,
     read_jsonl,
     should_skip,
     stable_sha256,
-    subset_values,
     write_csv,
     write_json,
     write_jsonl,
@@ -213,7 +213,7 @@ def main() -> None:
         "model_alias": args.model_alias,
         "subsets": {},
     }
-    for subset in subset_values(args.subset):
+    for subset in print_subset_plan(args.subset, stage="PP-2", model_alias=args.model_alias):
         root_manifest["subsets"][subset] = train_subset(
             args,
             subset=subset,

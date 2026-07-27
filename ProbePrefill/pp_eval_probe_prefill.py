@@ -29,6 +29,7 @@ from pp_common import (
     make_dp_run_root,
     parse_gpus,
     parse_thresholds,
+    print_subset_plan,
     prepare_feature_meta_shard,
     prepare_feature_tensor_shard,
     pp_subdir,
@@ -43,7 +44,6 @@ from pp_common import (
     should_skip,
     sigmoid_temperature,
     sort_records_by_task_ids,
-    subset_values,
     write_json,
     write_jsonl,
 )
@@ -468,7 +468,7 @@ def run_data_parallel(
         "data_parallel": {"num_workers": len(gpus), "gpus": gpus},
         "subsets": {},
     }
-    for subset in subset_values(args.subset):
+    for subset in print_subset_plan(args.subset, stage="PP-3", model_alias=args.model_alias):
         _features, meta_rows, feature_summary = load_test_features(root, args.model_alias, subset)
         probe_manifest_path = probe_dir(root, args.model_alias, subset) / "manifest.json"
         probe_manifest = read_json(probe_manifest_path) if probe_manifest_path.exists() else {}
@@ -592,7 +592,7 @@ def main() -> None:
                 "prefill_mode": prefill_mode,
                 "subsets": {},
             }
-            for subset in subset_values(args.subset):
+            for subset in print_subset_plan(args.subset, stage="PP-3", model_alias=args.model_alias):
                 root_manifest["subsets"][subset] = {}
                 for threshold in thresholds:
                     summary = evaluate_case(

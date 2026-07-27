@@ -58,6 +58,7 @@ __all__ = [
     "load_utils",
     "parse_thresholds",
     "path_from_config",
+    "print_subset_plan",
     "pp_subdir",
     "private_rows",
     "probe_prefill_root",
@@ -140,6 +141,12 @@ def pp_subdir(root: Path, kind: str) -> Path:
 
 def subset_values(value: str) -> list[str]:
     return list(SUBSETS) if value == "all" else [value]
+
+
+def print_subset_plan(value: str, *, stage: str, model_alias: str) -> list[str]:
+    subsets = subset_values(value)
+    print(f"{stage} {model_alias}: subset order = {' -> '.join(subsets)}", flush=True)
+    return subsets
 
 
 def parse_thresholds(text: str) -> list[float]:

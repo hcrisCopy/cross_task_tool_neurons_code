@@ -25,6 +25,7 @@ from pp_common import (
     make_dp_run_root,
     parse_gpus,
     parse_thresholds,
+    print_subset_plan,
     prepare_feature_meta_shard,
     pp_subdir,
     probe_prefill_root,
@@ -39,7 +40,6 @@ from pp_common import (
     should_skip,
     sort_records_by_task_ids,
     stable_sha256,
-    subset_values,
     write_json,
     write_jsonl,
 )
@@ -367,7 +367,7 @@ def run_data_parallel(
         "data_parallel": {"num_workers": len(gpus), "gpus": gpus},
         "subsets": {},
     }
-    for subset in subset_values(args.subset):
+    for subset in print_subset_plan(args.subset, stage="PP-4", model_alias=args.model_alias):
         meta_rows = feature_meta(root, args.model_alias, subset)
         base_out = base_dir(root, args.model_alias, subset)
         params = expected_base_params(
@@ -530,7 +530,7 @@ def main() -> None:
                 "prefill_mode": prefill_mode,
                 "subsets": {},
             }
-            for subset in subset_values(args.subset):
+            for subset in print_subset_plan(args.subset, stage="PP-4", model_alias=args.model_alias):
                 summary = evaluate_base(
                     args,
                     subset=subset,
