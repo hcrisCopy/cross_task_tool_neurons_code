@@ -20,9 +20,9 @@ from pp_common import (
     method_label,
     method_neuron_identity,
     normalize_probe_method,
+    prepare_probe_method_root,
     print_subset_plan,
     probe_method_choices,
-    probe_method_root,
     pp_subdir,
     probe_prefill_root,
     read_json,
@@ -191,7 +191,7 @@ def main() -> None:
     args.probe_method = normalize_probe_method(args.probe_method)
     activations_dir = resolve_path(args.activations_dir) if args.activations_dir else default_method_activations_dir(args.probe_method)
     neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else default_method_neurons_dir(args.probe_method)
-    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
+    root = prepare_probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     features_root = pp_subdir(root, "features")
     subsets = print_subset_plan(args.subset, stage="PP-1", model_alias=args.model_alias)
     root_manifest: dict[str, Any] = {

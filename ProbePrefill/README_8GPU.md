@@ -17,11 +17,14 @@
 ../cross_task_tool_neurons_data/probe_prefill/
 ```
 
-默认 `--probe-method safety_kernel` 会复用已有 Safety Kernel/CTD 产物与 legacy 输出目录；`--probe-method precise_shield` 会读取 PreciseShield 的 PS-4/5/6 产物，并把 ProbePrefill 输出隔离到：
+不同神经元探测方法的 ProbePrefill 输出统一隔离到子文件夹，方便横向查看和避免互相覆盖：
 
 ```text
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
 ```
+
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。
 
 ## 运行顺序
 

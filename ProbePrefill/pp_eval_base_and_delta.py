@@ -28,6 +28,7 @@ from pp_common import (
     make_dp_run_root,
     parse_gpus,
     parse_thresholds,
+    prepare_probe_method_root,
     print_subset_plan,
     probe_method_choices,
     probe_method_root,
@@ -516,7 +517,7 @@ def main() -> None:
     set_single_process_cuda_visible(args.gpus)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
+    root = prepare_probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     dataset_root = resolve_path(args.dataset_dir) if args.dataset_dir else path_from_config("modified_dataset_dir")
     model_dataset = dataset_root / args.model_alias
     if not model_dataset.exists():

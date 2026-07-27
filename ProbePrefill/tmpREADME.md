@@ -19,7 +19,7 @@ multi_hop:  train 40,  test 30
 所有新输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ```
 
 ## 文件说明
@@ -56,19 +56,19 @@ ProbePrefill/tmpREADME.md                  # 本文件
 single-hop：
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset single_hop --max-train-samples 100 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset single_hop --max-train-samples 100 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 multi-hop：
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset multi_hop --max-train-samples 40 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset multi_hop --max-train-samples 40 --max-test-samples 30 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/probe_features/qwen3-4b-instruct/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/probe_features/qwen3-4b-instruct/<subset>/
 |-- train_features.pt
 |-- train_meta.jsonl
 |-- train_summary.json
@@ -84,13 +84,13 @@ python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct -
 ## PP-2 训练 CTD 二分类 probe
 
 ```text
-python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/probes/qwen3-4b-instruct/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/probes/qwen3-4b-instruct/<subset>/
 |-- probe_no_reasoning.pt
 |-- probe_results_no_reasoning.json
 |-- train_predictions.jsonl
@@ -115,13 +115,13 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset a
 ## PP-3 Probe&Prefill 评测
 
 ```text
-python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --subset all --thresholds 0.5 --temperature 2.0 --prefill-mode auto --backend vllm --tensor-parallel-size 1 --n-runs 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --record-mode lite
+python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --thresholds 0.5 --temperature 2.0 --prefill-mode auto --backend vllm --tensor-parallel-size 1 --n-runs 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --record-mode lite
 ```
 
 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/outputs/qwen3-4b-instruct/probe_prefill/<subset>/t0.5_temp2_soft/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/outputs/qwen3-4b-instruct/probe_prefill/<subset>/t0.5_temp2_soft/
 |-- outputs.json
 |-- per_task.jsonl
 |-- summary.json
@@ -132,7 +132,7 @@ python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --s
 |-- metric_report.md
 |-- manifest.json
 
-../cross_task_tool_neurons_data/probe_prefill/outputs/qwen3-4b-instruct/probe_prefill/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/outputs/qwen3-4b-instruct/probe_prefill/<subset>/
 |-- threshold_sweep_summary.csv
 |-- threshold_sweep_report.md
 |-- threshold_tradeoff.png
@@ -149,13 +149,13 @@ python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --s
 ## PP-4 Base/Default 和 delta
 
 ```text
-python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --subset all --thresholds 0.5 --temperature 2.0 --prefill-mode auto --backend vllm --tensor-parallel-size 1 --n-runs 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --record-mode lite
+python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --thresholds 0.5 --temperature 2.0 --prefill-mode auto --backend vllm --tensor-parallel-size 1 --n-runs 1 --max-rounds 10 --max-new-tokens 2048 --max-model-len 32768 --record-mode lite
 ```
 
 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/outputs/qwen3-4b-instruct/base_evaluation/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/outputs/qwen3-4b-instruct/base_evaluation/<subset>/
 |-- outputs.json
 |-- per_task.jsonl
 |-- summary.json
@@ -163,11 +163,11 @@ python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --
 |-- manifest.json
 |-- metric_report.md
 
-../cross_task_tool_neurons_data/probe_prefill/outputs/qwen3-4b-instruct/probe_prefill/<subset>/t0.5_temp2_soft/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/outputs/qwen3-4b-instruct/probe_prefill/<subset>/t0.5_temp2_soft/
 |-- comparison_with_base.csv
 |-- comparison_with_base_manifest.json
 
-../cross_task_tool_neurons_data/probe_prefill/outputs/qwen3-4b-instruct/probe_prefill/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/outputs/qwen3-4b-instruct/probe_prefill/<subset>/
 |-- delta_sweep_summary.csv
 |-- delta_report.md
 |-- delta_tradeoff.png
@@ -199,7 +199,7 @@ python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --su
 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/causal_validation/qwen3-4b-instruct/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/causal_validation/qwen3-4b-instruct/<subset>/
 |-- probe_control_summary.csv
 |-- probe_control_results.json
 |-- probe_control_report.md
@@ -242,7 +242,7 @@ python ProbePrefill/pp_causal_validation.py --model-alias qwen3-4b-instruct --su
 清理范围限制在：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ```
 
 不会删旧方案阶段 1-6，也不会删 PreciseShield。

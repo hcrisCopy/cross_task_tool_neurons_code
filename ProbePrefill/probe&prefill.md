@@ -10,7 +10,7 @@
 
 | `probe_method` | 上游方法 | 共享神经元 | activation 定义 | ProbePrefill 输出 |
 |---|---|---|---|---|
-| `safety_kernel` | Safety Kernel / SCAR | `CTD` | FFN 线性模块输出 last-token activation | legacy `probe_prefill/` |
+| `safety_kernel` | Safety Kernel / SCAR | `CTD` | FFN 线性模块输出 last-token activation | `probe_prefill/safety_kernel/` |
 | `precise_shield` | PreciseShield | `PS_CTD` | FFN intermediate `h` last-token activation | `probe_prefill/precise_shield/` |
 
 核心问题从固定的“CTD 能不能解码工具决策”升级为：
@@ -59,7 +59,7 @@ PreciseShield 输入：
 ProbePrefill 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/                  # safety_kernel legacy 输出
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/    # safety_kernel 输出
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/   # precise_shield 输出
 ```
 
@@ -178,7 +178,7 @@ phi_r(x) = [h_{n_1}(x), h_{n_2}(x), ..., h_{n_K}(x)] in R^K
 Safety Kernel 输出：
 
 ```text
-../cross_task_tool_neurons_data/probe_prefill/probe_features/<model_alias>/<subset>/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel/probe_features/<model_alias>/<subset>/
 ```
 
 PreciseShield 输出：

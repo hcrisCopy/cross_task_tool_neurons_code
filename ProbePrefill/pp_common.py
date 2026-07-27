@@ -43,7 +43,7 @@ PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
 SUPPORTED_PROBE_METHODS = (PROBE_METHOD_SAFETY_KERNEL, PROBE_METHOD_PRECISE_SHIELD)
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
-        "namespace": "",
+        "namespace": "safety_kernel",
         "label": "Safety Kernel",
         "shared_label": "CTD",
         "single_label": "TDN",
@@ -69,6 +69,14 @@ PROBE_METHOD_CONFIGS = {
         "probe_prefill_method": "PreciseShield-PS_CTD-Probe&Prefill",
     },
 }
+PP_SUBDIRS = {
+    "features": "probe_features",
+    "probes": "probes",
+    "outputs": "outputs",
+    "causal": "causal_validation",
+    "reports": "reports",
+}
+PP_LEGACY_SAFETY_KERNEL_SUBDIRS = tuple(PP_SUBDIRS.values())
 
 __all__ = [
     "PP_METHOD",
@@ -106,6 +114,7 @@ __all__ = [
     "probe_method_root",
     "path_from_config",
     "print_subset_plan",
+    "prepare_probe_method_root",
     "pp_subdir",
     "private_rows",
     "probe_prefill_root",
@@ -191,9 +200,39 @@ def _method_config(probe_method: str | None) -> dict[str, str]:
 def probe_method_root(root: Path, probe_method: str | None) -> Path:
     cfg = _method_config(probe_method)
     namespace = cfg["namespace"]
-    if not namespace or root.name == namespace:
+    if root.name == namespace:
         return root
     return root / namespace
+
+
+def _reuse_legacy_safety_kernel_outputs(base_root: Path, method_root: Path) -> None:
+    if not base_root.exists() or base_root == method_root:
+        return
+    copied: list[tuple[Path, Path]] = []
+    for name in PP_LEGACY_SAFETY_KERNEL_SUBDIRS:
+        src = base_root / name
+        dst = method_root / name
+        if not src.exists() or dst.exists():
+            continue
+        ensure_dir(method_root)
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            ensure_dir(dst.parent)
+            shutil.copy2(src, dst)
+        copied.append((src, dst))
+    if copied:
+        print("Reused legacy Safety Kernel ProbePrefill outputs under method namespace:", flush=True)
+        for src, dst in copied:
+            print(f"  {src} -> {dst}", flush=True)
+
+
+def prepare_probe_method_root(root: Path, probe_method: str | None) -> Path:
+    method = normalize_probe_method(probe_method)
+    method_root = probe_method_root(root, method)
+    if method == PROBE_METHOD_SAFETY_KERNEL:
+        _reuse_legacy_safety_kernel_outputs(root, method_root)
+    return method_root
 
 
 def default_method_activations_dir(probe_method: str | None) -> Path:
@@ -253,16 +292,9 @@ def probe_prefill_root(value: str | None = None) -> Path:
 
 
 def pp_subdir(root: Path, kind: str) -> Path:
-    mapping = {
-        "features": "probe_features",
-        "probes": "probes",
-        "outputs": "outputs",
-        "causal": "causal_validation",
-        "reports": "reports",
-    }
-    if kind not in mapping:
+    if kind not in PP_SUBDIRS:
         raise KeyError(f"Unknown ProbePrefill output kind: {kind}")
-    return root / mapping[kind]
+    return root / PP_SUBDIRS[kind]
 
 
 def subset_values(value: str) -> list[str]:

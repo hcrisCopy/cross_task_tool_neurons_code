@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 
 from pp_common import (
     PP_STAGE_VERSION,
+    PROBE_METHOD_SAFETY_KERNEL,
     features_from_rows,
     grouped_classification_metrics,
     is_dp_parent,
@@ -30,7 +31,9 @@ from pp_common import (
     load_tdn_rows,
     load_utils,
     path_from_config,
+    prepare_probe_method_root,
     print_subset_plan,
+    probe_method_root,
     pp_subdir,
     private_rows,
     probe_prefill_root,
@@ -717,7 +720,7 @@ def run_activation_mask_data_parallel(
     run_root = make_dp_run_root(root, stage="pp_05_activation_mask", model_alias=args.model_alias, subset=subset)
     worker_roots: list[Path] = []
     for index, indices in enumerate(shard_sets):
-        worker_root = run_root / f"shard_{index:02d}"
+        worker_root = probe_method_root(run_root / f"shard_{index:02d}", PROBE_METHOD_SAFETY_KERNEL)
         prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
         worker_roots.append(worker_root)
     interventions = parse_interventions(args.interventions)
@@ -751,7 +754,7 @@ def main() -> None:
     set_single_process_cuda_visible(args.gpus)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    root = probe_prefill_root(args.output_root)
+    root = prepare_probe_method_root(probe_prefill_root(args.output_root), PROBE_METHOD_SAFETY_KERNEL)
     activations_dir = resolve_path(args.activations_dir) if args.activations_dir else path_from_config("activations_dir")
     neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else path_from_config("neurons_dir")
     dataset_root = resolve_path(args.dataset_dir) if args.dataset_dir else path_from_config("modified_dataset_dir")

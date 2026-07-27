@@ -22,8 +22,8 @@ from pp_common import (
     normalize_probe_method,
     pp_subdir,
     print_subset_plan,
+    prepare_probe_method_root,
     probe_method_choices,
-    probe_method_root,
     probe_prefill_root,
     read_json,
     read_jsonl,
@@ -231,7 +231,7 @@ def main() -> None:
     args.probe_method = normalize_probe_method(args.probe_method)
     if args.reg <= 0:
         raise ValueError("--reg must be positive")
-    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
+    root = prepare_probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     features_root = pp_subdir(root, "features")
     probes_root = pp_subdir(root, "probes")
     root_manifest: dict[str, Any] = {
