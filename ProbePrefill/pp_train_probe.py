@@ -24,6 +24,7 @@ from pp_common import (
     write_json,
     write_jsonl,
 )
+from pp_reporting import write_probe_training_report
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,7 +128,17 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
     params = expected_params(args, subset=subset, train_summary=train_summary, test_summary=test_summary)
     expected = [out_dir / "probe_no_reasoning.pt", out_dir / "probe_results_no_reasoning.json", out_dir / "test_predictions.jsonl"]
     if should_skip(out_dir, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=probes_root):
-        return read_json(out_dir / "probe_results_no_reasoning.json")
+        results = read_json(out_dir / "probe_results_no_reasoning.json")
+        train_predictions = read_jsonl(out_dir / "train_predictions.jsonl") if (out_dir / "train_predictions.jsonl").exists() else []
+        test_predictions = read_jsonl(out_dir / "test_predictions.jsonl") if (out_dir / "test_predictions.jsonl").exists() else []
+        if train_predictions and test_predictions:
+            write_probe_training_report(
+                out_dir=out_dir,
+                results=results,
+                train_predictions=train_predictions,
+                test_predictions=test_predictions,
+            )
+        return results
 
     out_dir.mkdir(parents=True, exist_ok=True)
     c_value = 1.0 / args.reg
@@ -169,10 +180,18 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
         out_dir / "probe_no_reasoning.pt",
     )
     write_json(out_dir / "probe_results_no_reasoning.json", results)
-    write_jsonl(out_dir / "train_predictions.jsonl", flatten_probe_predictions(meta_train, train_prob, threshold=args.threshold))
-    write_jsonl(out_dir / "test_predictions.jsonl", flatten_probe_predictions(meta_test, test_prob, threshold=args.threshold))
+    train_predictions = flatten_probe_predictions(meta_train, train_prob, threshold=args.threshold)
+    test_predictions = flatten_probe_predictions(meta_test, test_prob, threshold=args.threshold)
+    write_jsonl(out_dir / "train_predictions.jsonl", train_predictions)
+    write_jsonl(out_dir / "test_predictions.jsonl", test_predictions)
     write_csv(out_dir / "probe_coefficients.csv", coefficients_rows(clf.coef_[0], neuron_rows))
     write_json(out_dir / "manifest.json", {"params": params, "summary": results["test"]["overall"]})
+    write_probe_training_report(
+        out_dir=out_dir,
+        results=results,
+        train_predictions=train_predictions,
+        test_predictions=test_predictions,
+    )
     print(
         f"{subset}: CTD probe AUROC={results['test']['overall']['auroc']} "
         f"Acc={results['test']['overall']['accuracy']:.4f} dim={X_train.shape[1]}"

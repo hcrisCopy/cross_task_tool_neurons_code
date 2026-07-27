@@ -47,6 +47,7 @@ from pp_common import (
     write_json,
     write_jsonl,
 )
+from pp_reporting import write_eval_case_report, write_threshold_sweep_report
 
 from cttn.eval_metrics import (
     aggregate_run_summaries,
@@ -220,6 +221,7 @@ def write_case_outputs(
     run_outputs: dict[str, list[dict[str, Any]]],
     all_per_task: list[dict[str, Any]],
     params: dict[str, Any],
+    tool_format: str,
 ) -> dict[str, Any]:
     run_summaries: dict[str, dict[str, Any]] = {}
     for run_id in range(args.n_runs):
@@ -265,6 +267,18 @@ def write_case_outputs(
     )
     write_csv(out_dir / "summary_table.csv", flat_rows)
     write_json(out_dir / "manifest.json", {"params": params, "summary": summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {}))})
+    write_eval_case_report(
+        out_dir=out_dir,
+        summary=summary_payload,
+        model_alias=args.model_alias,
+        subset=subset,
+        method=PP_METHOD,
+        threshold=threshold,
+        temperature=args.temperature,
+        prefill_mode=prefill_mode,
+        tool_format=tool_format,
+        prefill_stats=prefill_stats,
+    )
     return summary_payload
 
 
@@ -310,7 +324,21 @@ def evaluate_case(
         params["data_parallel_worker"] = {"worker_index": args._worker_index, "num_workers": args._num_workers}
     expected = [out_dir / "summary.json", out_dir / "per_task.jsonl", out_dir / "outputs.json"]
     if should_skip(out_dir, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "outputs")):
-        return read_json(out_dir / "summary.json")
+        summary = read_json(out_dir / "summary.json")
+        prefill_stats_existing = read_json(out_dir / "prefill_stats.json") if (out_dir / "prefill_stats.json").exists() else prefill_stats
+        write_eval_case_report(
+            out_dir=out_dir,
+            summary=summary,
+            model_alias=args.model_alias,
+            subset=subset,
+            method=PP_METHOD,
+            threshold=threshold,
+            temperature=args.temperature,
+            prefill_mode=prefill_mode,
+            tool_format=tool_format,
+            prefill_stats=prefill_stats_existing,
+        )
+        return summary
 
     run_outputs: dict[str, list[dict[str, Any]]] = {}
     all_per_task: list[dict[str, Any]] = []
@@ -347,6 +375,7 @@ def evaluate_case(
         run_outputs=run_outputs,
         all_per_task=all_per_task,
         params=params,
+        tool_format=tool_format,
     )
     print(f"Wrote Probe&Prefill evaluation: {out_dir}")
     return summary_payload
@@ -415,6 +444,7 @@ def merge_shard_outputs(
         run_outputs=run_outputs,
         all_per_task=all_per_task,
         params=params,
+        tool_format=tool_format,
     )
 
 
@@ -474,6 +504,15 @@ def run_data_parallel(
             root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
                 "overall", summary.get("mean_std", {}).get("overall", {})
             )
+        subset_out_dir = pp_subdir(root, "outputs") / args.model_alias / "probe_prefill" / subset
+        write_threshold_sweep_report(
+            out_dir=subset_out_dir,
+            cases=[(threshold, output_dir(root, args.model_alias, subset, tag_for(threshold, args.temperature, prefill_mode))) for threshold in thresholds],
+            model_alias=args.model_alias,
+            subset=subset,
+            prefill_mode=prefill_mode,
+            temperature=args.temperature,
+        )
     return root_manifest
 
 def main() -> None:
@@ -536,6 +575,15 @@ def main() -> None:
                     root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
                         "overall", summary.get("mean_std", {}).get("overall", {})
                     )
+                subset_out_dir = pp_subdir(root, "outputs") / args.model_alias / "probe_prefill" / subset
+                write_threshold_sweep_report(
+                    out_dir=subset_out_dir,
+                    cases=[(threshold, output_dir(root, args.model_alias, subset, tag_for(threshold, args.temperature, prefill_mode))) for threshold in thresholds],
+                    model_alias=args.model_alias,
+                    subset=subset,
+                    prefill_mode=prefill_mode,
+                    temperature=args.temperature,
+                )
         finally:
             del agent
             gc.collect()

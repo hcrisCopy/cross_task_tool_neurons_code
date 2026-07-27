@@ -43,6 +43,7 @@ from pp_common import (
     write_json,
     write_jsonl,
 )
+from pp_reporting import write_delta_sweep_report, write_eval_case_report
 
 from cttn.eval_metrics import (
     aggregate_run_summaries,
@@ -178,6 +179,7 @@ def write_base_outputs(
     run_outputs: dict[str, list[dict[str, Any]]],
     all_per_task: list[dict[str, Any]],
     params: dict[str, Any],
+    tool_format: str,
 ) -> dict[str, Any]:
     run_summaries: dict[str, dict[str, Any]] = {}
     for run_id in range(args.n_runs):
@@ -201,6 +203,18 @@ def write_base_outputs(
     )
     write_csv(out_dir / "summary_table.csv", flat_rows)
     write_json(out_dir / "manifest.json", {"params": params, "summary": summary_payload.get("overall", summary_payload.get("mean_std", {}).get("overall", {}))})
+    write_eval_case_report(
+        out_dir=out_dir,
+        summary=summary_payload,
+        model_alias=args.model_alias,
+        subset=subset,
+        method="Base/Default",
+        threshold=None,
+        temperature=None,
+        prefill_mode="none",
+        tool_format=params.get("tool_format"),
+        prefill_stats=None,
+    )
     return summary_payload
 
 
@@ -229,7 +243,20 @@ def evaluate_base(
         params["data_parallel_worker"] = {"worker_index": args._worker_index, "num_workers": args._num_workers}
     expected = [out_dir / "summary.json", out_dir / "per_task.jsonl", out_dir / "outputs.json"]
     if should_skip(out_dir, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "outputs")):
-        return read_json(out_dir / "summary.json")
+        summary = read_json(out_dir / "summary.json")
+        write_eval_case_report(
+            out_dir=out_dir,
+            summary=summary,
+            model_alias=args.model_alias,
+            subset=subset,
+            method="Base/Default",
+            threshold=None,
+            temperature=None,
+            prefill_mode="none",
+            tool_format=tool_format,
+            prefill_stats=None,
+        )
+        return summary
 
     run_outputs: dict[str, list[dict[str, Any]]] = {}
     all_per_task: list[dict[str, Any]] = []
@@ -259,6 +286,7 @@ def evaluate_base(
         run_outputs=run_outputs,
         all_per_task=all_per_task,
         params=params,
+        tool_format=tool_format,
     )
     print(f"Wrote Base/Default evaluation: {out_dir}")
     return summary_payload
@@ -304,6 +332,7 @@ def merge_base_shards(
         run_outputs=run_outputs,
         all_per_task=all_per_task,
         params=params,
+        tool_format=tool_format,
     )
 
 
@@ -396,6 +425,21 @@ def build_delta_tables(
             params=params,
             overwrite=args.overwrite,
         )
+    write_delta_sweep_report(
+        out_dir=pp_subdir(root, "outputs") / args.model_alias / "probe_prefill" / subset,
+        comparisons=[
+            (
+                threshold,
+                probe_eval_dir(root, args.model_alias, subset, tag_for(threshold, args.temperature, prefill_mode))
+                / "comparison_with_base.csv",
+            )
+            for threshold in thresholds
+        ],
+        model_alias=args.model_alias,
+        subset=subset,
+        prefill_mode=prefill_mode,
+        temperature=args.temperature,
+    )
     return out
 
 

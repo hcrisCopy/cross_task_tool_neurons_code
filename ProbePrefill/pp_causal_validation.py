@@ -51,6 +51,7 @@ from pp_common import (
     write_json,
     write_jsonl,
 )
+from pp_reporting import write_activation_mask_report, write_probe_control_report
 
 from cttn.agent import HFGenerationAgent
 from cttn.data import TASK_TYPES
@@ -269,6 +270,7 @@ def run_probe_controls(
         summary_rows.append(row)
     write_json(out_dir / "probe_control_results.json", results)
     write_csv(out_dir / "probe_control_summary.csv", summary_rows)
+    write_probe_control_report(out_dir=out_dir, rows=summary_rows, model_alias=args.model_alias, subset=subset)
     write_json(out_dir / "probe_controls" / "manifest.json", {"params": params, "rows": len(summary_rows)})
     print(f"Wrote probe feature controls: {out_dir / 'probe_control_summary.csv'}")
     return results
@@ -459,6 +461,13 @@ def run_activation_mask_validation(
 
         write_csv(out_dir / "summary_table.csv", summary_rows)
         write_csv(out_dir / "cross_type_summary.csv", cross_rows)
+        write_activation_mask_report(
+            out_dir=out_dir,
+            summary_rows=summary_rows,
+            cross_rows=cross_rows,
+            model_alias=args.model_alias,
+            subset=subset,
+        )
         manifest = {
             "params": params,
             "ctd_neuron_count": len(ctd_rows),
@@ -565,6 +574,13 @@ def write_activation_summary_tables(
 
     write_csv(out_dir / "summary_table.csv", summary_rows)
     write_csv(out_dir / "cross_type_summary.csv", cross_rows)
+    write_activation_mask_report(
+        out_dir=out_dir,
+        summary_rows=summary_rows,
+        cross_rows=cross_rows,
+        model_alias=args.model_alias,
+        subset=subset,
+    )
     manifest = {
         "params": params,
         "ctd_neuron_count": len(ctd_rows),
