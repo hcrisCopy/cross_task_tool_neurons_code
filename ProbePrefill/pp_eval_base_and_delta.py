@@ -180,6 +180,8 @@ def write_base_outputs(
     all_per_task: list[dict[str, Any]],
     params: dict[str, Any],
     tool_format: str,
+    comparison_thresholds: list[float],
+    comparison_temperature: float,
 ) -> dict[str, Any]:
     run_summaries: dict[str, dict[str, Any]] = {}
     for run_id in range(args.n_runs):
@@ -214,6 +216,8 @@ def write_base_outputs(
         prefill_mode="none",
         tool_format=params.get("tool_format"),
         prefill_stats=None,
+        comparison_thresholds=comparison_thresholds,
+        comparison_temperature=comparison_temperature,
     )
     return summary_payload
 
@@ -228,6 +232,7 @@ def evaluate_base(
     w2t_utils: Any,
     agent: Any,
     tool_format: str,
+    thresholds: list[float],
 ) -> dict[str, Any]:
     meta_rows = feature_meta(root, args.model_alias, subset)
     tasks = task_order_from_meta(model_dataset, subset, meta_rows)
@@ -255,6 +260,8 @@ def evaluate_base(
             prefill_mode="none",
             tool_format=tool_format,
             prefill_stats=None,
+            comparison_thresholds=thresholds,
+            comparison_temperature=args.temperature,
         )
         return summary
 
@@ -287,6 +294,8 @@ def evaluate_base(
         all_per_task=all_per_task,
         params=params,
         tool_format=tool_format,
+        comparison_thresholds=thresholds,
+        comparison_temperature=args.temperature,
     )
     print(f"Wrote Base/Default evaluation: {out_dir}")
     return summary_payload
@@ -300,6 +309,7 @@ def merge_base_shards(
     worker_roots: list[Path],
     model_path: Path,
     tool_format: str,
+    thresholds: list[float],
 ) -> dict[str, Any]:
     meta_rows = feature_meta(root, args.model_alias, subset)
     task_ids = [str(row["id"]) for row in meta_rows]
@@ -333,6 +343,8 @@ def merge_base_shards(
         all_per_task=all_per_task,
         params=params,
         tool_format=tool_format,
+        comparison_thresholds=thresholds,
+        comparison_temperature=args.temperature,
     )
 
 
@@ -374,7 +386,15 @@ def run_data_parallel(
             desc=f"PP-4 {args.model_alias}/{subset}",
             extra_cli=["--_skip-delta"],
         )
-        summary = merge_base_shards(args=args, subset=subset, root=root, worker_roots=worker_roots, model_path=model_path, tool_format=tool_format)
+        summary = merge_base_shards(
+            args=args,
+            subset=subset,
+            root=root,
+            worker_roots=worker_roots,
+            model_path=model_path,
+            tool_format=tool_format,
+            thresholds=thresholds,
+        )
         comparisons = build_delta_tables(args, root=root, subset=subset, thresholds=thresholds, prefill_mode=prefill_mode)
         root_manifest["subsets"][subset] = {
             "base_overall": summary.get("overall", summary.get("mean_std", {}).get("overall", {})),
@@ -491,6 +511,7 @@ def main() -> None:
                     w2t_utils=w2t_utils,
                     agent=agent,
                     tool_format=tool_format,
+                    thresholds=thresholds,
                 )
                 comparisons = {} if args._skip_delta else build_delta_tables(args, root=root, subset=subset, thresholds=thresholds, prefill_mode=prefill_mode)
                 root_manifest["subsets"][subset] = {

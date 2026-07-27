@@ -107,7 +107,8 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset a
 
 关键点：
 - `AUROC/Accuracy` 是当前 CTD 神经元特征 probe 的结果。
-- 报告里同时打印 When2Tool 论文 hidden-state probe 参考值，只用于对照，不是本实验结果。
+- 终端和 `probe_report.md` 会同时打印 When2Tool 论文 hidden-state probe 参考值：single-hop 对应表3，multi-hop 对应表10；这些值只用于对照，不是本实验结果。
+- 训练日志会打印 `reg/C/max_iter/threshold`。`threshold` 是报告和后续决策阈值，训练本身仍是同一个 logistic probe。
 - `threshold` 只影响二分类报告和后续 prefill 决策，不会反过来训练 probe。
 
 ## PP-3 Probe&Prefill 评测
@@ -139,8 +140,10 @@ python ProbePrefill/pp_eval_probe_prefill.py --model-alias qwen3-4b-instruct --s
 做法：读取 test 特征，用 probe 得到 `P(tool_necessary)`；`p < tau` 填 “I can solve this directly without using a tool.”，否则填 “I need to use a tool for this question.”。qwen 自动用 soft prefill；Llama 会自动用 hard prefill。评测走 When2Tool 官方 `evaluate_batched`。
 
 打印指标：
-- 主指标：Final Accuracy、Total Tool Calls、Avg Tool Calls、Tool Call Rate、Total/Avg Token Cost。
-- 诊断指标：DecisionAcc、OverCall、UnderCall、ToolPrecision/Recall/F1、ValidToolCallRate、ToolTrajectorySuccessRate。
+- 当前实验条件：model、subset、prompt_mode、reasoning_mode、`tau`、温度 `T`、实际 `prefill_mode`。
+- 可直接对比论文的主指标：Final Accuracy、Total Tool Calls、Avg Tool Calls、Tool Call Rate、Total/Avg Token Cost。
+- 论文参考值：single-hop 对应表8（soft）/表12（hard）/表13（temperature），multi-hop 对应表11；终端会按当前模型列出论文完整 tau 表。
+- 神经元方案额外诊断指标：DecisionAcc、OverCall、UnderCall、ToolPrecision/Recall/F1、ValidToolCallRate、ToolTrajectorySuccessRate。这些用于分析工具决策质量，不混作论文主表指标。
 - `Tool Call Rate = sum(tool_calls) / sum(expected_steps)`；single-hop 通常 `expected_steps=1`，multi-hop 通常 `expected_steps=3`。
 - `Token Cost = generation_tokens + 0.2 * prefill_tokens`，严格跟 When2Tool 代码一致。
 
@@ -172,6 +175,12 @@ python ProbePrefill/pp_eval_base_and_delta.py --model-alias qwen3-4b-instruct --
 ```
 
 做法：Base 不加 prefill、不加 adapter、不做 mask，其他 prompt/tool/schema/parser/生成参数和 PP-3 一致。随后按同分组计算 `DeltaAcc(pp)`、`DeltaAvgTC`、`DeltaTC%`、`ToolCallReduction%`、`Cost` 和工具决策诊断 delta。
+
+打印指标：
+- Base 阶段会说明 Base 自身没有 `tau/T/prefill`，并打印后续用于对比的 PP 阈值列表和温度。
+- delta sweep 会按每个 `tau` 打印 BaseAcc、PPAcc、DeltaAcc、BaseTC、PPTC、ToolCallReduction、DeltaAvgTC、Cost。
+- 论文参考值：single-hop 会打印表4（六模型平均分难度）、表7（当前模型 tau=0.5）和表8/12 的阈值行；multi-hop 会打印表9（当前模型 Best PP）和表11 的阈值行。
+- 工具决策 delta（DecisionAcc、OverCall、UnderCall、ToolF1 等）只作为神经元方案诊断指标，不当作论文主表直接对比。
 
 delta 口径：
 - 全部 delta 都是 `CTD-Probe&Prefill - Base/Default`，同模型、同 subset、同一批 test id、同一套 When2Tool parser/state machine。
