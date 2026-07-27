@@ -923,64 +923,66 @@ def write_delta_sweep_report(
         )
     lines.extend(["", metric_glossary_markdown(), ""])
     (out_dir / "delta_report.md").write_text("\n".join(lines), encoding="utf-8")
-    if rows:
-        print(f"\n=== PP-4 delta 指标：{model_alias}/{subset} ===")
-        print(f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, T={temperature}, prefill={prefill_mode}, tau={[row['threshold'] for row in rows]}；delta=PP-Base")
-        print(f"对齐论文: {paper_delta_table_name(subset)}。")
-        _print_paper_metric_notes(["DeltaAcc", "DeltaTC", "DeltaAcc/-DeltaTC"])
-        compare_rows: list[list[Any]] = []
-        for row in rows:
+    if not rows:
+        print(f"PP-4 {model_alias}/{subset}: no printable delta rows; comparison CSVs need overall rows.")
+        return
+    print(f"\n=== PP-4 delta 指标：{model_alias}/{subset} ===")
+    print(f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, T={temperature}, prefill={prefill_mode}, tau={[row['threshold'] for row in rows]}；delta=PP-Base")
+    print(f"对齐论文: {paper_delta_table_name(subset)}。")
+    _print_paper_metric_notes(["DeltaAcc", "DeltaTC", "DeltaAcc/-DeltaTC"])
+    compare_rows: list[list[Any]] = []
+    for row in rows:
+        compare_rows.append(
+            [
+                _fmt_float(row.get("threshold"), 1),
+                "ours",
+                _fmt_pp(row.get("delta_acc_pp"), 2),
+                _fmt_float(row.get("delta_avg_tool_calls")),
+                _fmt_defined(row.get("acc_cost_per_saved_call"), 2),
+            ]
+        )
+        if row.get("paper_delta_acc_pp") is not None:
             compare_rows.append(
                 [
                     _fmt_float(row.get("threshold"), 1),
-                    "ours",
-                    _fmt_pp(row.get("delta_acc_pp"), 2),
-                    _fmt_float(row.get("delta_avg_tool_calls")),
-                    _fmt_defined(row.get("acc_cost_per_saved_call"), 2),
+                    "when2tool",
+                    _fmt_pp(row.get("paper_delta_acc_pp"), 1),
+                    _fmt_float(row.get("paper_delta_avg_tool_calls"), 2),
+                    _fmt_defined(row.get("paper_acc_cost_per_saved_call"), 1),
                 ]
             )
-            if row.get("paper_delta_acc_pp") is not None:
-                compare_rows.append(
+    _print_table(["tau", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], compare_rows)
+    if subset == "single_hop" and any(abs(float(row["threshold"]) - 0.5) < 1e-6 for row in rows):
+        print("分难度（single-hop 表4，when2tool 为六模型平均；tau=0.5）:")
+        diff_compare_rows: list[list[Any]] = []
+        overall_t05 = next((row for row in rows if abs(float(row["threshold"]) - 0.5) < 1e-6), None)
+        diff_rows = difficulty_rows_by_threshold.get(_threshold_key(0.5), {})
+        for difficulty in ["easy", "medium", "hard", "overall"]:
+            ours_row = overall_t05 if difficulty == "overall" else diff_rows.get(difficulty)
+            if ours_row:
+                diff_compare_rows.append(
                     [
-                        _fmt_float(row.get("threshold"), 1),
-                        "when2tool",
-                        _fmt_pp(row.get("paper_delta_acc_pp"), 1),
-                        _fmt_float(row.get("paper_delta_avg_tool_calls"), 2),
-                        _fmt_defined(row.get("paper_acc_cost_per_saved_call"), 1),
+                        difficulty,
+                        "ours",
+                        _fmt_pp(ours_row.get("delta_acc_pp"), 2),
+                        _fmt_float(ours_row.get("delta_avg_tool_calls")),
+                        _fmt_defined(ours_row.get("acc_cost_per_saved_call"), 2),
                     ]
                 )
-        _print_table(["tau", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], compare_rows)
-        if subset == "single_hop" and any(abs(float(row["threshold"]) - 0.5) < 1e-6 for row in rows):
-            print("分难度（single-hop 表4，when2tool 为六模型平均；tau=0.5）:")
-            diff_compare_rows: list[list[Any]] = []
-            overall_t05 = next((row for row in rows if abs(float(row["threshold"]) - 0.5) < 1e-6), None)
-            diff_rows = difficulty_rows_by_threshold.get(_threshold_key(0.5), {})
-            for difficulty in ["easy", "medium", "hard", "overall"]:
-                ours_row = overall_t05 if difficulty == "overall" else diff_rows.get(difficulty)
-                if ours_row:
-                    diff_compare_rows.append(
-                        [
-                            difficulty,
-                            "ours",
-                            _fmt_pp(ours_row.get("delta_acc_pp"), 2),
-                            _fmt_float(ours_row.get("delta_avg_tool_calls")),
-                            _fmt_defined(ours_row.get("acc_cost_per_saved_call"), 2),
-                        ]
-                    )
-                ref = WHEN2TOOL_COST_AVG_REFERENCE.get(difficulty)
-                if ref:
-                    diff_compare_rows.append(
-                        [
-                            difficulty,
-                            "when2tool",
-                            _fmt_pp(ref["delta_acc_pp"], 1),
-                            _fmt_float(ref["delta_avg_tool_calls"], 2),
-                            _fmt_defined(ref["cost"], 1),
-                        ]
-                    )
-            if diff_compare_rows:
-                _print_table(["difficulty", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], diff_compare_rows)
-        print("保存但不打印: Base/PP 绝对指标、ToolCallReduction%、工具决策 delta、delta_sweep_summary.csv、delta_report.md、delta_tradeoff.png")
+            ref = WHEN2TOOL_COST_AVG_REFERENCE.get(difficulty)
+            if ref:
+                diff_compare_rows.append(
+                    [
+                        difficulty,
+                        "when2tool",
+                        _fmt_pp(ref["delta_acc_pp"], 1),
+                        _fmt_float(ref["delta_avg_tool_calls"], 2),
+                        _fmt_defined(ref["cost"], 1),
+                    ]
+                )
+        if diff_compare_rows:
+            _print_table(["difficulty", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], diff_compare_rows)
+    print("保存但不打印: Base/PP 绝对指标、ToolCallReduction%、工具决策 delta、delta_sweep_summary.csv、delta_report.md、delta_tradeoff.png")
 
 
 def _maybe_float(value: Any) -> Any:

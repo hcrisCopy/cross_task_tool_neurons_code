@@ -485,8 +485,10 @@ def compare_summaries_to_base(
     if not overwrite and out_csv.exists() and out_manifest.exists():
         manifest = read_json(out_manifest)
         if manifest.get("params") == params:
-            print(f"Skip existing comparison: {out_csv}")
-            return manifest
+            if _comparison_csv_has_printable_overall(out_csv):
+                print(f"Skip existing comparison: {out_csv}")
+                return manifest
+            print(f"Rebuild stale comparison missing printable overall: {out_csv}")
     rows = build_comparison_with_base(
         base_summary=read_json(base_summary_path),
         trained_summary=read_json(probe_summary_path),
@@ -498,6 +500,19 @@ def compare_summaries_to_base(
     manifest = {"params": params, "rows": len(rows), "path": str(out_csv)}
     write_json(out_manifest, manifest)
     return manifest
+
+
+def _comparison_csv_has_printable_overall(path: Path) -> bool:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            fieldnames = set(reader.fieldnames or [])
+            required = {"group_kind", "group_name", "delta_acc_pp", "delta_avg_tool_calls"}
+            if not required.issubset(fieldnames):
+                return False
+            return any(row.get("group_kind") == "overall" and row.get("group_name") == "overall" for row in reader)
+    except OSError:
+        return False
 
 
 def remove_files(paths: Iterable[Path], *, allowed_root: Path) -> None:
