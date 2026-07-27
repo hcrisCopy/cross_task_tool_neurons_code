@@ -51,6 +51,7 @@ llama3.3-70b
 - Qwen 走 XML tool call，Llama 走 native tool calling，规则由公共代码按模型标签识别。
 - 正式评测使用 `--n-runs 3`；小样本 smoke 才改成 `--n-runs 1`。
 - 每阶段都有参数敏感 `manifest.json`。产物存在且参数一致会提前跳过；发现旧错误产物时在原命令末尾加 `--clean`，清理范围限制在 `../cross_task_tool_neurons_data/precise_shield/` 对应阶段内。
+- 单卡运行时使用各阶段给出的“单卡指令”。PS-6 不加载大模型、不做多卡并行，单卡命令和原命令相同。
 
 八卡策略：
 
@@ -122,6 +123,12 @@ multi-hop train/test  = 180 / 450
 python PreciseShield/ps_run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0 --sample-strategy first --seed 2026
 ```
 
+单卡指令：
+
+```text
+python PreciseShield/ps_run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0 --sample-strategy first --seed 2026
+```
+
 输出：
 
 ```text
@@ -139,6 +146,12 @@ python PreciseShield/ps_run_activation_extraction.py --model-alias qwen3-4b-inst
 python PreciseShield/ps_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield/visualizations --subset all --intervention-ratio 0.01 --min-neurons-per-layer 1 --heatmap-top-n 300 --epsilon 1.0e-12 --min-class-count 2
 ```
 
+单卡指令：
+
+```text
+python PreciseShield/ps_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/precise_shield/activations --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield/visualizations --subset all --intervention-ratio 0.01 --min-neurons-per-layer 1 --heatmap-top-n 300 --epsilon 1.0e-12 --min-class-count 2 --device cuda:0
+```
+
 输出：
 
 ```text
@@ -150,6 +163,12 @@ python PreciseShield/ps_discover_single_type_neurons.py --model-alias qwen3-4b-i
 做法：只读 train activation。每个 task type 内分别计算 `D_call` 和 `D_direct`，逐层 `TopK(S_call) \ TopK(S_direct)`。如果某类型的 0/1 标签数不足，直接报错，不改公式。
 
 ## PS-6：跨类型共享神经元
+
+```text
+python PreciseShield/ps_discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield/visualizations --subset all --heatmap-top-n 300
+```
+
+单卡指令：
 
 ```text
 python PreciseShield/ps_discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/precise_shield/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield/visualizations --subset all --heatmap-top-n 300

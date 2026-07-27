@@ -151,6 +151,7 @@ modelscope download --model LLM-Research/Llama-3.3-70B-Instruct --local_dir ../m
 
 - 固定模型标签：`qwen3-1.7b`、`qwen3-4b-instruct`、`qwen3-14b`、`qwen3-32b`、`llama3.1-8b`、`llama3.3-70b`。
 - 下面阶段 2 到阶段 11 的命令都是单机八卡正式实验命令；每次只替换 `--model-alias qwen3-4b-instruct`。
+- 单卡运行时使用各阶段给出的“单卡指令”；阶段 1、3、6 本身没有多卡参数，单卡直接按原指令执行。
 - 正式实验随机种子固定 `2026`；需要随机 mask 的阶段也用同一个 seed。
 - 单跳 `single_hop` 和多跳 `multi_hop` 全程分开；阶段 7 分别训练两个 adapter。
 - 跑标签和构造数据使用 train+test；神经元发现和训练只使用 train；训练后评测、Base 评测和因果验证只使用 test。
@@ -179,6 +180,12 @@ python code/01_raw_data_preparation/inspect_raw_data.py --overwrite
 
 ```text
 python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo third_party/when2tool --single-train-count 900 --single-test-count 2250 --multi-train-count 180 --multi-test-count 450 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 8 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16 --seed 2026
+```
+
+单卡指令：
+
+```text
+python code/02_labeling/generate_tool_necessity_labels.py --model-alias qwen3-4b-instruct --raw-dataset-dir ../cross_task_tool_neurons_data/datasets/raw_when2tool --labels-dir ../cross_task_tool_neurons_data/labels --when2tool-repo third_party/when2tool --single-train-count 900 --single-test-count 2250 --multi-train-count 180 --multi-test-count 450 --candidate-multiplier 2.0 --require-per-type-labels --backend vllm --tensor-parallel-size 1 --max-model-len 32768 --max-new-tokens 2048 --max-rounds 12 --record-mode lite --vllm-dtype bfloat16 --seed 2026
 ```
 
 涉及文件：`code/02_labeling/generate_tool_necessity_labels.py`，`code/00_common/`，`configs/models.yaml`，`third_party/when2tool/`，原始数据目录。
@@ -227,6 +234,12 @@ python code/03_dataset_building/build_modified_dataset.py --model-alias qwen3-4b
 python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0,1,2,3,4,5,6,7 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0
 ```
 
+单卡指令：
+
+```text
+python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0
+```
+
 涉及文件：`code/11_multigpu/run_activation_extraction.py`，`code/04_activation_extraction/extract_ffn_activations.py`，改造后数据集，`configs/models.yaml`，`third_party/when2tool/`。
 
 输出：
@@ -246,6 +259,12 @@ python code/11_multigpu/run_activation_extraction.py --model-alias qwen3-4b-inst
 
 ```text
 python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/activations --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --top-k 5000 --heatmap-top-n 300 --epsilon 1.0e-8 --min-class-count 2 --devices cuda:0,cuda:1,cuda:2,cuda:3,cuda:4,cuda:5,cuda:6,cuda:7
+```
+
+单卡指令：
+
+```text
+python code/05_single_type_discovery/discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/activations --neurons-dir ../cross_task_tool_neurons_data/neurons --visualizations-dir ../cross_task_tool_neurons_data/visualizations --subset all --top-k 5000 --heatmap-top-n 300 --epsilon 1.0e-8 --min-class-count 2 --device cuda:0
 ```
 
 涉及文件：`code/05_single_type_discovery/discover_single_type_neurons.py`，阶段 4 的 train activation，`../cross_task_tool_neurons_data/visualizations/`。

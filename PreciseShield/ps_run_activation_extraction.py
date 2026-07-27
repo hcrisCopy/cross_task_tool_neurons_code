@@ -99,6 +99,9 @@ def run_data_parallel(args: argparse.Namespace, gpus: list[str], subset: str, sp
     num_shards = args.num_data_shards or len(gpus)
     if num_shards > len(gpus):
         raise ValueError("--num-data-shards cannot exceed the number of GPUs in data mode")
+    if num_shards == 1:
+        run_checked(base_cmd(args, subset, split), cuda_visible_devices=gpus[0])
+        return
     workers: list[tuple[int, subprocess.Popen[bytes]]] = []
     for shard_index in range(num_shards):
         cmd = base_cmd(args, subset, split)

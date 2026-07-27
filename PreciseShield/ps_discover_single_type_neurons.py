@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heatmap-top-n", type=int, default=300)
     parser.add_argument("--epsilon", type=float, default=1.0e-12)
     parser.add_argument("--min-class-count", type=int, default=2)
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Device for PreciseShield saliency tensor statistics: auto, cpu, cuda, or cuda:<index>.",
+    )
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -76,6 +81,7 @@ def expected_params(
         "heatmap_top_n": args.heatmap_top_n,
         "epsilon": args.epsilon,
         "min_class_count": args.min_class_count,
+        "device": args.device,
         "activation_dir": str(activation_dir),
         "activation_manifest_params": activation_manifest.get("params", {}),
         "activation_definition": "last_input_token_ffn_intermediate_h_before_down_proj",
@@ -90,22 +96,55 @@ def topk_count(dim: int, ratio: float, minimum: int) -> int:
     return min(dim, max(int(math.floor(ratio * dim)), int(minimum)))
 
 
+def resolve_compute_device(value: str) -> torch.device:
+    if value == "auto":
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(value)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA device requested for PreciseShield PS-5, but torch.cuda.is_available() is false")
+    return device
+
+
 def compute_layer_saliency(
     activations: torch.Tensor,
     down_norm: torch.Tensor,
     indices: list[int],
     eps: float,
+    device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    x = activations.index_select(0, torch.tensor(indices, dtype=torch.long)).float()
+    idx = torch.tensor(indices, dtype=torch.long)
+    if device.type == "cuda":
+        with torch.cuda.device(device):
+            x = activations.index_select(0, idx).to(device, non_blocking=True).float()
+            norm = down_norm.to(device, non_blocking=True).float()
+            mean_activation = x.mean(dim=0)
+            # Eq. (5): I_i(D)=||a_bar_i(D) * w_down_i||_2 = |a_bar_i(D)| * ||w_down_i||_2.
+            importance = mean_activation.abs() * norm
+            saliency = importance / (importance.sum() + eps)
+            result = {
+                "mean_activation": mean_activation.detach().cpu(),
+                "importance": importance.detach().cpu(),
+                "saliency": saliency.detach().cpu(),
+            }
+            del x, norm, mean_activation, importance, saliency
+            torch.cuda.empty_cache()
+            return result
+
+    x = activations.index_select(0, idx).to(device).float()
+    norm = down_norm.to(device).float()
     mean_activation = x.mean(dim=0)
     # Eq. (5): I_i(D)=||a_bar_i(D) * w_down_i||_2 = |a_bar_i(D)| * ||w_down_i||_2.
-    importance = mean_activation.abs() * down_norm.float()
+    importance = mean_activation.abs() * norm
     saliency = importance / (importance.sum() + eps)
     return {
         "mean_activation": mean_activation.cpu(),
         "importance": importance.cpu(),
         "saliency": saliency.cpu(),
     }
+
+
+def topk_cpu(values: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.topk(values, k)
 
 
 def selected_rows_for_type(
@@ -117,6 +156,7 @@ def selected_rows_for_type(
     min_neurons_per_layer: int,
     eps: float,
     min_class_count: int,
+    device: torch.device,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, dict[str, torch.Tensor]]]:
     activations: dict[str, torch.Tensor] = payload["activations"]
     down_norms: dict[str, torch.Tensor] = payload["down_weight_norms"]
@@ -140,10 +180,10 @@ def selected_rows_for_type(
         layer = int(meta["layer"])
         dim = int(meta["dim"])
         k = topk_count(dim, intervention_ratio, min_neurons_per_layer)
-        call_pack = compute_layer_saliency(activations[key], down_norms[key], call_indices, eps)
-        direct_pack = compute_layer_saliency(activations[key], down_norms[key], direct_indices, eps)
-        call_vals, call_idxs = torch.topk(call_pack["saliency"], k)
-        _direct_vals, direct_idxs = torch.topk(direct_pack["saliency"], k)
+        call_pack = compute_layer_saliency(activations[key], down_norms[key], call_indices, eps, device)
+        direct_pack = compute_layer_saliency(activations[key], down_norms[key], direct_indices, eps, device)
+        call_vals, call_idxs = topk_cpu(call_pack["saliency"], k)
+        _direct_vals, direct_idxs = topk_cpu(direct_pack["saliency"], k)
         direct_set = {int(i) for i in direct_idxs.tolist()}
         rank_by_index = {int(idx): rank for rank, idx in enumerate(call_idxs.tolist(), start=1)}
         for score, idx in zip(call_vals.tolist(), call_idxs.tolist()):
@@ -268,6 +308,8 @@ def main() -> None:
     model_single_root = single_root(neurons_root, args.model_alias)
     viz_dir = viz_root / args.model_alias / "single_type_by_subset"
     subsets = subset_values(args.subset)
+    compute_device = resolve_compute_device(args.device)
+    print(f"PreciseShield PS-5 compute device: {compute_device}")
 
     for subset in subsets:
         act_dir = activation_root / args.model_alias / subset / "train"
@@ -308,6 +350,7 @@ def main() -> None:
                 min_neurons_per_layer=args.min_neurons_per_layer,
                 eps=args.epsilon,
                 min_class_count=args.min_class_count,
+                device=compute_device,
             )
             rows_by_type[task_type] = rows
             out_dir = subset_dir / task_type
@@ -342,4 +385,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
