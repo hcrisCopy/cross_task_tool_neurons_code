@@ -127,26 +127,6 @@ WHEN2TOOL_COST_AVG_REFERENCE = {
 }
 
 
-WHEN2TOOL_COST_MODEL_REFERENCE = {
-    "qwen3-1.7b": {"delta_acc_pp": 0.1, "delta_avg_tool_calls": -0.26, "cost": 0.3},
-    "qwen3-4b-instruct": {"delta_acc_pp": -0.7, "delta_avg_tool_calls": -0.36, "cost": -1.9},
-    "qwen3-14b": {"delta_acc_pp": -1.3, "delta_avg_tool_calls": -0.44, "cost": -2.9},
-    "qwen3-32b": {"delta_acc_pp": -4.0, "delta_avg_tool_calls": -0.56, "cost": -7.2},
-    "llama3.1-8b": {"delta_acc_pp": -9.8, "delta_avg_tool_calls": -0.59, "cost": -16.6},
-    "llama3.3-70b": {"delta_acc_pp": 5.2, "delta_avg_tool_calls": -0.67, "cost": 7.8},
-}
-
-
-WHEN2TOOL_MULTI_SUMMARY_REFERENCE = {
-    "qwen3-1.7b": {"default_acc_pct": 21.2, "default_tc": 1180, "probe_acc_pct": 59.2, "probe_tc": 85, "probe_delta_tc_pct": -93.0},
-    "qwen3-4b-instruct": {"default_acc_pct": 82.1, "default_tc": 1719, "probe_acc_pct": 85.3, "probe_tc": 437, "probe_delta_tc_pct": -75.0},
-    "qwen3-14b": {"default_acc_pct": 87.5, "default_tc": 1503, "probe_acc_pct": 86.2, "probe_tc": 996, "probe_delta_tc_pct": -34.0},
-    "qwen3-32b": {"default_acc_pct": 88.9, "default_tc": 1634, "probe_acc_pct": 89.0, "probe_tc": 727, "probe_delta_tc_pct": -55.0},
-    "llama3.1-8b": {"default_acc_pct": 40.2, "default_tc": 1005, "probe_acc_pct": 60.2, "probe_tc": 1361, "probe_delta_tc_pct": 35.0},
-    "llama3.3-70b": {"default_acc_pct": 62.4, "default_tc": 985, "probe_acc_pct": 80.3, "probe_tc": 1789, "probe_delta_tc_pct": 82.0},
-}
-
-
 def _write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,30 +236,32 @@ def _print_table(headers: list[str], rows: list[list[Any]]) -> None:
         print(" | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(row)))
 
 
-def _print_metric_glossary(scope: str) -> None:
-    scope_keys = {
-        "probe": {"AUROC", "Accuracy", "Precision", "Recall", "F1"},
-        "eval": {
-            "Final Accuracy",
-            "Total Tool Calls",
-            "Avg Tool Calls",
-            "Tool Call Rate",
-            "Total Token Cost",
-            "Avg Token Cost",
-            "DecisionAcc",
-            "OverCall",
-            "UnderCall",
-            "ToolPrecision/Recall/F1",
-            "ValidToolCallRate",
-            "ToolTrajectorySuccessRate",
-        },
-        "delta": {"DeltaAcc(pp)", "DeltaAvgTC", "DeltaTCR", "DeltaTC%", "ToolCallReduction%", "Cost"},
+def _print_paper_metric_notes(metric_names: list[str]) -> None:
+    meanings = {
+        "AUROC": "探针 ROC 面积",
+        "Accuracy": "探针按 tau 二分类准确率",
+        "Acc": "最终答案准确率",
+        "TC": "Total Tool Calls，总工具调用次数",
+        "AvgTC": "平均每题工具调用次数",
+        "DeltaAcc": "Acc_PP - Acc_Base，单位 pp",
+        "DeltaTC": "AvgTC_PP - AvgTC_Base；负数表示少调用",
+        "DeltaAcc/-DeltaTC": "每减少 1 次平均工具调用对应的准确率变化",
     }
-    wanted = scope_keys.get(scope, {name for name, _meaning in METRIC_GLOSSARY})
-    print("\n关键指标解释（中文）:")
-    for name, meaning in METRIC_GLOSSARY:
-        if name in wanted:
-            print(f"  - {name}: {meaning}")
+    notes = [f"{name}={meanings[name]}" for name in metric_names if name in meanings]
+    if notes:
+        print("指标: " + "；".join(notes))
+
+
+def _value_or_missing(value: Any, digits: int = 4) -> str:
+    if value is None or value == "":
+        return "未计算"
+    return _fmt_float(value, digits)
+
+
+def _fmt_defined(value: Any, digits: int = 2) -> str:
+    if value is None or value == "":
+        return "未定义"
+    return _fmt_float(value, digits)
 
 
 def _display_name(model_alias: str) -> str:
@@ -480,44 +462,41 @@ def print_probe_training_summary(results: dict[str, Any], ref: dict[str, Any] | 
     subset = results.get("subset")
     overall = results.get("test", {}).get("overall", {})
     print("\n=== PP-2 探针训练指标（CTD 神经元特征）===")
-    print(f"当前条件: model={model_alias} ({_display_name(str(model_alias))}), subset={subset}, feature_dim={results.get('feature_dim')}")
     print(
-        "训练设置: StandardScaler + L2 LogisticRegression, "
-        f"reg={results.get('reg')} -> C={results.get('C')}, "
-        f"max_iter={results.get('max_iter', 'unknown')}, 报告阈值 tau={results.get('threshold')}"
+        f"条件: model={model_alias} ({_display_name(str(model_alias))}), subset={subset}, "
+        f"tau={results.get('threshold')}, reg={results.get('reg')}, max_iter={results.get('max_iter', 'unknown')}, "
+        f"feature_dim={results.get('feature_dim')}"
     )
-    print("标签定义: tool_necessary=1 表示当前模型无工具答错，所以工具必要；tool_necessary=0 表示无工具答对。")
-    print(f"论文阶段: When2Tool Section 4 Probing Analysis，对应 {paper_probe_table_name(str(subset))}；论文特征是 all-layer pre-generation hidden states，本项目当前特征是 CTD FFN activation。")
-    table_rows = [
-        [
-            "本实验 CTD probe",
-            _fmt_float(overall.get("auroc")),
-            _fmt_acc_pct(overall.get("accuracy")),
-            _fmt_float(overall.get("precision")),
-            _fmt_float(overall.get("recall")),
-            _fmt_float(overall.get("f1")),
-        ]
-    ]
-    if ref:
-        table_rows.append(
-            [
-                f"When2Tool {paper_probe_table_name(str(subset))}",
-                _fmt_float(ref.get("auroc")),
-                _fmt_acc_pct(ref.get("accuracy")),
-                "NA",
-                "NA",
-                "NA",
-            ]
-        )
-    _print_table(["来源", "AUROC", "Accuracy", "Precision", "Recall", "F1"], table_rows)
-    if ref and str(subset) == "single_hop":
+    print(f"对齐论文: {paper_probe_table_name(str(subset))}；ours=CTD 神经元 probe，when2tool=hidden-state probe。")
+    _print_paper_metric_notes(["AUROC", "Accuracy"])
+    headers = ["source", "AUROC", "Accuracy"]
+    ours_row = ["ours", _fmt_float(overall.get("auroc")), _fmt_float(overall.get("accuracy"))]
+    paper_row = ["when2tool", _fmt_float(ref.get("auroc")), _fmt_float(ref.get("accuracy"))] if ref else None
+    _print_table(headers, [ours_row] + ([paper_row] if paper_row else []))
+    if str(subset) == "single_hop" and ref:
+        by_diff = results.get("test", {}).get("by_difficulty", {})
+        diff_headers = ["source", "easy AUROC", "medium AUROC", "hard AUROC"]
         _print_table(
-            ["论文 AUROC 分难度", "easy", "medium", "hard"],
-            [[paper_probe_table_name(str(subset)), _fmt_float(ref.get("easy_auroc")), _fmt_float(ref.get("medium_auroc")), _fmt_float(ref.get("hard_auroc"))]],
+            diff_headers,
+            [
+                [
+                    "ours",
+                    _value_or_missing(by_diff.get("easy", {}).get("auroc")),
+                    _value_or_missing(by_diff.get("medium", {}).get("auroc")),
+                    _value_or_missing(by_diff.get("hard", {}).get("auroc")),
+                ],
+                [
+                    "when2tool",
+                    _fmt_float(ref.get("easy_auroc")),
+                    _fmt_float(ref.get("medium_auroc")),
+                    _fmt_float(ref.get("hard_auroc")),
+                ],
+            ],
         )
-    print("论文补充表: 表14说明 all-layer hidden-state probe 通常优于单层；表16说明 lambda=10000 是论文默认且整体稳定。")
-    _print_metric_glossary("probe")
-    print("输出文件: probe_report.md, probe_metrics_table.csv, probe_probability_hist.png, probe_roc_curve.png")
+    print(
+        "保存但不打印: Precision/Recall/F1、confusion matrix、按 task/env/difficulty 的完整分组、"
+        "probe_report.md、probe_metrics_table.csv、probe_roc_curve.png、probe_probability_hist.png"
+    )
 
 
 def _write_probe_plots(*, out_dir: Path, train_predictions: list[dict[str, Any]], test_predictions: list[dict[str, Any]]) -> None:
@@ -661,84 +640,58 @@ def print_eval_case_summary(
     overall = section_metrics(summary, "overall")
     base_ref = paper_base_reference(model_alias, subset)
     print(f"\n=== 生成评测指标：{method} ===")
-    print(f"当前条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, prompt_mode=current, reasoning_mode=no_reasoning")
     if threshold is None:
         cmp_tau = ",".join(f"{x:g}" for x in comparison_thresholds or [])
         print(
-            "Base/Default 自身不使用 probe 阈值和 prefill；"
-            f"本命令后续用于对比的 Probe&Prefill 阈值 tau=[{cmp_tau or '未传入'}], 温度 T={comparison_temperature if comparison_temperature is not None else '未传入'}。"
+            f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, Base 无 tau/T/prefill；"
+            f"后续 PP 对比 tau=[{cmp_tau or '未传入'}], T={comparison_temperature if comparison_temperature is not None else '未传入'}"
         )
-    else:
-        print(f"Probe&Prefill 设置: tau={threshold:g}, 温度 T={temperature}, prefill_mode={prefill_mode}。")
-    print("delta 口径提醒: 后续 comparison/delta 一律是 CTD-Probe&Prefill - Base/Default。")
-    _print_table(
-        ["当前结果", "N", "FinalAcc", "TotalTC", "AvgTC", "TCR", "AvgTokenCost"],
-        [
+        print(f"对齐论文: {paper_eval_table_name(subset)} Prompt-only Default。")
+        _print_paper_metric_notes(["Acc", "TC", "AvgTC"])
+        rows = [
             [
-                method,
-                _fmt_float(overall.get("n"), 0),
+                "ours",
                 _fmt_acc_pct(overall.get("final_accuracy")),
                 _fmt_float(overall.get("total_tool_calls"), 2),
                 _fmt_float(overall.get("avg_tool_calls")),
-                _fmt_float(overall.get("tool_call_rate")),
-                _fmt_float(overall.get("avg_token_cost")),
             ]
-        ],
-    )
-    print("神经元方案额外诊断指标（论文主表不直接报告，用于检查工具决策质量）:")
-    _print_table(
-        ["DecisionAcc", "OverCall", "UnderCall", "ToolPrecision", "ToolRecall", "ToolF1", "ValidToolCallRate", "TrajectorySuccess"],
-        [
-            [
-                _fmt_float(overall.get("decision_accuracy")),
-                _fmt_float(overall.get("over_call_rate")),
-                _fmt_float(overall.get("under_call_rate")),
-                _fmt_float(overall.get("tool_precision")),
-                _fmt_float(overall.get("tool_recall")),
-                _fmt_float(overall.get("tool_f1")),
-                _fmt_float(overall.get("valid_tool_call_rate")),
-                _fmt_float(overall.get("tool_trajectory_success_rate")),
-            ]
-        ],
-    )
-    print(f"论文阶段: When2Tool Section 5 Probe&Prefill，对应 {paper_eval_table_name(subset)}；single-hop 还对应表12（soft/hard, T=2.0）和表13（temperature scaling）。")
-    if threshold is None and base_ref:
-        _print_table(
-            ["论文参考", "N", "tau", "T", "设置", "Acc", "TotalTC", "AvgTC"],
-            [
+        ]
+        if base_ref:
+            rows.append(
                 [
-                    f"{paper_eval_table_name(subset)} Prompt-only Default",
-                    base_ref["n"],
-                    "无",
-                    "无",
-                    "no prefill",
+                    "when2tool",
                     f"{base_ref['accuracy_pct']:.1f}%",
                     base_ref["total_tool_calls"],
                     _fmt_float(base_ref["avg_tool_calls"]),
                 ]
-            ],
+            )
+        _print_table(["source", "Acc", "TC", "AvgTC"], rows)
+    else:
+        print(
+            f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, "
+            f"tau={threshold:g}, T={temperature}, prefill={prefill_mode}"
         )
-    elif ref:
-        _print_table(
-            ["论文参考", "tau", "T", "prefill", "BaseAcc", "BaseTC", "PPAcc", "PPTC", "DeltaAcc", "ToolCallReduction"],
+        print(f"对齐论文: {paper_eval_table_name(subset)} Probe&Prefill。")
+        _print_paper_metric_notes(["Acc", "TC", "AvgTC"])
+        rows = [
             [
+                "ours",
+                _fmt_acc_pct(overall.get("final_accuracy")),
+                _fmt_float(overall.get("total_tool_calls"), 2),
+                _fmt_float(overall.get("avg_tool_calls")),
+            ]
+        ]
+        if ref:
+            rows.append(
                 [
-                    paper_eval_table_name(subset),
-                    _fmt_float(ref["threshold"], 1),
-                    "2.0",
-                    ref["prefill_mode"],
-                    f"{ref['base_accuracy_pct']:.1f}%",
-                    ref["base_total_tool_calls"],
+                    "when2tool",
                     f"{ref['probe_accuracy_pct']:.1f}%",
                     ref["probe_total_tool_calls"],
-                    _fmt_pp(ref["delta_acc_pp"], 1),
-                    f"{ref['tool_call_reduction_percent']:.1f}%",
+                    _fmt_float(ref["probe_total_tool_calls"] / ref["n"]),
                 ]
-            ],
-        )
-    else:
-        print("论文参考: 当前模型/subset/tau/prefill_mode 没有内置可直接对照的 When2Tool 表格行。")
-    _print_metric_glossary("eval")
+            )
+        _print_table(["source", "Acc", "TC", "AvgTC"], rows)
+    print("保存但不打印: DecisionAcc/OverCall/UnderCall/ToolPrecision/Recall/F1、token cost、分组 summary_table.csv、metric_report.md")
 
 
 def _markdown_metric_row(metrics: dict[str, Any]) -> str:
@@ -859,87 +812,35 @@ def write_threshold_sweep_report(
     lines.extend(["", metric_glossary_markdown(), ""])
     (out_dir / "threshold_sweep_report.md").write_text("\n".join(lines), encoding="utf-8")
     if rows:
-        best = max(rows, key=lambda r: float(r.get("final_accuracy") or 0.0))
-        fewest_calls = min(rows, key=lambda r: float(r.get("total_tool_calls") or 1e18))
         print(f"\n=== PP-3 阈值 sweep 指标：{model_alias}/{subset} ===")
-        print(f"当前条件: prefill_mode={prefill_mode}, 温度 T={temperature}, tau 列表={[row['threshold'] for row in rows]}")
-        print("论文阶段: When2Tool Section 5 Probe&Prefill，主表是 " + paper_eval_table_name(subset) + "；single-hop 的 hard prefill 对应表12，温度设置对照表13。")
-        print("可直接对比论文的主指标:")
-        _print_table(
-            [
-                "tau",
-                "本实验 FinalAcc",
-                "本实验 TotalTC",
-                "本实验 AvgTC",
-                "论文 PPAcc",
-                "论文 PPTC",
-                "论文 DeltaAcc",
-                "论文 ToolCallReduction",
-            ],
-            [
+        print(f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, T={temperature}, prefill={prefill_mode}, tau={[row['threshold'] for row in rows]}")
+        print(f"对齐论文: {paper_eval_table_name(subset)} Probe&Prefill。")
+        _print_paper_metric_notes(["Acc", "TC", "AvgTC"])
+        compare_rows: list[list[Any]] = []
+        for row in rows:
+            compare_rows.append(
                 [
                     _fmt_float(row.get("threshold"), 1),
+                    "ours",
                     _fmt_acc_pct(row.get("final_accuracy")),
                     _fmt_float(row.get("total_tool_calls"), 2),
                     _fmt_float(row.get("avg_tool_calls")),
-                    f"{float(row['paper_probe_accuracy_pct']):.1f}%" if row.get("paper_probe_accuracy_pct") is not None else "NA",
-                    int(row["paper_probe_total_tool_calls"]) if row.get("paper_probe_total_tool_calls") is not None else "NA",
-                    _fmt_pp(row.get("paper_delta_acc_pp"), 1),
-                    f"{float(row['paper_tool_call_reduction_percent']):.1f}%" if row.get("paper_tool_call_reduction_percent") is not None else "NA",
                 ]
-                for row in rows
-            ],
-        )
-        print("神经元方案额外诊断指标（不作为论文主表直接对比）:")
-        _print_table(
-            ["tau", "DecisionAcc", "OverCall", "UnderCall", "ToolPrecision", "ToolRecall", "ToolF1"],
-            [
-                [
-                    _fmt_float(row.get("threshold"), 1),
-                    _fmt_float(row.get("decision_accuracy")),
-                    _fmt_float(row.get("over_call_rate")),
-                    _fmt_float(row.get("under_call_rate")),
-                    _fmt_float(row.get("tool_precision")),
-                    _fmt_float(row.get("tool_recall")),
-                    _fmt_float(row.get("tool_f1")),
-                ]
-                for row in rows
-            ],
-        )
-        paper_rows = paper_threshold_rows(model_alias, subset, prefill_mode)
-        base_ref = paper_base_reference(model_alias, subset)
-        if base_ref:
-            print("When2Tool 论文 Base/Default 参考:")
-            _print_table(
-                ["论文表", "N", "tau", "T", "Acc", "TotalTC", "AvgTC"],
-                [[paper_eval_table_name(subset), base_ref["n"], "无", "无", f"{base_ref['accuracy_pct']:.1f}%", base_ref["total_tool_calls"], _fmt_float(base_ref["avg_tool_calls"])]],
             )
-        if paper_rows:
-            print("When2Tool 论文完整阈值参考（同一模型；论文特征为 hidden-state probe，本实验特征为 CTD 神经元）:")
-            _print_table(
-                ["论文表", "tau", "T", "prefill", "PPAcc", "PPTC", "AvgTC", "DeltaAcc", "ToolCallReduction"],
-                [
+            if row.get("paper_probe_accuracy_pct") is not None:
+                paper_tc = float(row["paper_probe_total_tool_calls"])
+                paper_n = paper_eval_reference(model_alias, subset, float(row["threshold"]), prefill_mode)
+                compare_rows.append(
                     [
-                        paper_eval_table_name(subset),
-                        _fmt_float(row["threshold"], 1),
-                        "2.0",
-                        row["prefill_mode"],
-                        f"{row['accuracy_pct']:.1f}%",
-                        row["total_tool_calls"],
-                        _fmt_float(row["avg_tool_calls"]),
-                        _fmt_pp(row["delta_acc_pp"], 1),
-                        f"{row['tool_call_reduction_percent']:.1f}%",
+                        _fmt_float(row.get("threshold"), 1),
+                        "when2tool",
+                        f"{float(row['paper_probe_accuracy_pct']):.1f}%",
+                        int(paper_tc),
+                        _fmt_float((paper_tc / paper_n["n"]) if paper_n else None),
                     ]
-                    for row in paper_rows
-                ],
-            )
-        print(
-            f"当前 sweep 最优准确率: tau={best['threshold']} FinalAcc={_fmt_acc_pct(best.get('final_accuracy'))}, "
-            f"TotalTC={_fmt_float(best.get('total_tool_calls'), 2)}；最少工具调用: tau={fewest_calls['threshold']} "
-            f"TotalTC={_fmt_float(fewest_calls.get('total_tool_calls'), 2)}, FinalAcc={_fmt_acc_pct(fewest_calls.get('final_accuracy'))}。"
-        )
-        print(f"输出文件: {out_dir / 'threshold_sweep_summary.csv'}, {out_dir / 'threshold_sweep_report.md'}, {out_dir / 'threshold_tradeoff.png'}")
-        _print_metric_glossary("eval")
+                )
+        _print_table(["tau", "source", "Acc", "TC", "AvgTC"], compare_rows)
+        print(f"保存但不打印: 工具决策诊断、token cost、threshold_sweep_summary.csv、threshold_sweep_report.md、threshold_tradeoff.png")
 
 
 def write_delta_sweep_report(
@@ -952,16 +853,21 @@ def write_delta_sweep_report(
     temperature: float,
 ) -> None:
     rows: list[dict[str, Any]] = []
+    difficulty_rows_by_threshold: dict[float, dict[str, dict[str, Any]]] = {}
     for threshold, csv_path in comparisons:
         if not csv_path.exists():
             continue
+        csv_rows = _read_csv(csv_path)
         overall = None
-        for row in _read_csv(csv_path):
+        difficulty_rows: dict[str, dict[str, Any]] = {}
+        for row in csv_rows:
             if row.get("group_kind") == "overall" and row.get("group_name") == "overall":
                 overall = row
-                break
+            elif row.get("group_kind") == "difficulty":
+                difficulty_rows[str(row.get("group_name"))] = {key: _maybe_float(value) for key, value in row.items()}
         if not overall:
             continue
+        difficulty_rows_by_threshold[_threshold_key(threshold)] = difficulty_rows
         parsed: dict[str, Any] = {
             "model_alias": model_alias,
             "subset": subset,
@@ -974,6 +880,10 @@ def write_delta_sweep_report(
         ref = paper_eval_reference(model_alias, subset, threshold, prefill_mode)
         if ref:
             parsed["paper_delta_acc_pp"] = ref["delta_acc_pp"]
+            parsed["paper_delta_avg_tool_calls"] = ref["delta_avg_tool_calls"]
+            parsed["paper_acc_cost_per_saved_call"] = (
+                ref["delta_acc_pp"] / (-ref["delta_avg_tool_calls"]) if ref["delta_avg_tool_calls"] < 0 else ""
+            )
             parsed["paper_tool_call_reduction_percent"] = ref["tool_call_reduction_percent"]
         rows.append(parsed)
     rows.sort(key=lambda r: float(r["threshold"]))
@@ -1014,121 +924,63 @@ def write_delta_sweep_report(
     lines.extend(["", metric_glossary_markdown(), ""])
     (out_dir / "delta_report.md").write_text("\n".join(lines), encoding="utf-8")
     if rows:
-        best_reduction = max(rows, key=lambda r: float(r.get("tool_call_reduction_percent") or -1e9))
-        best_acc_delta = max(rows, key=lambda r: float(r.get("delta_acc_pp") or -1e18))
         print(f"\n=== PP-4 delta 指标：{model_alias}/{subset} ===")
-        print(f"当前条件: prefill_mode={prefill_mode}, 温度 T={temperature}, tau 列表={[row['threshold'] for row in rows]}")
-        print("delta 基准: 同模型、同 subset、同一批 test id、同一套 When2Tool prompt/tool/parser/generation 参数的 Base/Default；全部 delta = CTD-Probe&Prefill - Base/Default。")
-        print("可直接对比 When2Tool 论文的主 delta 指标:")
-        _print_table(
-            [
-                "tau",
-                "BaseAcc",
-                "PPAcc",
-                "DeltaAcc",
-                "BaseTC",
-                "PPTC",
-                "ToolCallReduction",
-                "DeltaAvgTC",
-                "Cost",
-                "论文 DeltaAcc/Reduction",
-            ],
-            [
+        print(f"条件: model={model_alias} ({_display_name(model_alias)}), subset={subset}, T={temperature}, prefill={prefill_mode}, tau={[row['threshold'] for row in rows]}；delta=PP-Base")
+        print(f"对齐论文: {paper_delta_table_name(subset)}。")
+        _print_paper_metric_notes(["DeltaAcc", "DeltaTC", "DeltaAcc/-DeltaTC"])
+        compare_rows: list[list[Any]] = []
+        for row in rows:
+            compare_rows.append(
                 [
                     _fmt_float(row.get("threshold"), 1),
-                    _fmt_acc_pct(row.get("base_final_accuracy")),
-                    _fmt_acc_pct(row.get("ctd_final_accuracy")),
+                    "ours",
                     _fmt_pp(row.get("delta_acc_pp"), 2),
-                    _fmt_float(row.get("base_total_tool_calls"), 2),
-                    _fmt_float(row.get("ctd_total_tool_calls"), 2),
-                    f"{_fmt_float(row.get('tool_call_reduction_percent'), 2)}%",
                     _fmt_float(row.get("delta_avg_tool_calls")),
-                    _fmt_float(row.get("acc_cost_per_saved_call"), 2),
-                    (
-                        f"{float(row['paper_delta_acc_pp']):.1f}pp/{float(row['paper_tool_call_reduction_percent']):.1f}%"
-                        if row.get("paper_delta_acc_pp") is not None
-                        else "NA"
-                    ),
+                    _fmt_defined(row.get("acc_cost_per_saved_call"), 2),
                 ]
-                for row in rows
-            ],
-        )
-        print("神经元方案额外诊断 delta（论文主表不直接报告，用于定位工具决策变化）:")
-        _print_table(
-            ["tau", "DeltaDecisionAcc", "DeltaOverCall", "DeltaUnderCall", "DeltaToolPrecision", "DeltaToolRecall", "DeltaToolF1"],
-            [
-                [
-                    _fmt_float(row.get("threshold"), 1),
-                    _fmt_pp(row.get("delta_decision_accuracy_pp"), 2),
-                    _fmt_pp(row.get("delta_over_call_rate_pp"), 2),
-                    _fmt_pp(row.get("delta_under_call_rate_pp"), 2),
-                    _fmt_pp(row.get("delta_tool_precision_pp"), 2),
-                    _fmt_pp(row.get("delta_tool_recall_pp"), 2),
-                    _fmt_pp(row.get("delta_tool_f1_pp"), 2),
-                ]
-                for row in rows
-            ],
-        )
-        paper_rows = paper_threshold_rows(model_alias, subset, prefill_mode)
-        if paper_rows:
-            print(f"When2Tool 论文阈值 delta 参考（{paper_eval_table_name(subset)}，论文特征为 hidden-state probe）:")
-            _print_table(
-                ["tau", "T", "prefill", "PPAcc", "PPTC", "DeltaAcc", "DeltaAvgTC", "ToolCallReduction", "Cost"],
-                [
+            )
+            if row.get("paper_delta_acc_pp") is not None:
+                compare_rows.append(
                     [
-                        _fmt_float(row["threshold"], 1),
-                        "2.0",
-                        row["prefill_mode"],
-                        f"{row['accuracy_pct']:.1f}%",
-                        row["total_tool_calls"],
-                        _fmt_pp(row["delta_acc_pp"], 1),
-                        _fmt_float(row["delta_avg_tool_calls"]),
-                        f"{row['tool_call_reduction_percent']:.1f}%",
-                        _fmt_float(row["cost"], 1),
+                        _fmt_float(row.get("threshold"), 1),
+                        "when2tool",
+                        _fmt_pp(row.get("paper_delta_acc_pp"), 1),
+                        _fmt_float(row.get("paper_delta_avg_tool_calls"), 2),
+                        _fmt_defined(row.get("paper_acc_cost_per_saved_call"), 1),
                     ]
-                    for row in paper_rows
-                ],
-            )
-        if subset == "single_hop":
-            print("When2Tool 表4参考（六个模型平均，按难度；tau=0.5 的 Probe&Prefill 相对 Default）:")
-            _print_table(
-                ["难度", "DeltaAcc", "DeltaAvgTC", "Cost"],
-                [
-                    [difficulty, _fmt_pp(ref["delta_acc_pp"], 1), _fmt_float(ref["delta_avg_tool_calls"], 2), _fmt_float(ref["cost"], 1)]
-                    for difficulty, ref in WHEN2TOOL_COST_AVG_REFERENCE.items()
-                ],
-            )
-            model_ref = WHEN2TOOL_COST_MODEL_REFERENCE.get(model_alias)
-            if model_ref:
-                print("When2Tool 表7参考（当前模型，single-hop，tau=0.5，相对 Default）:")
-                _print_table(
-                    ["模型", "DeltaAcc", "DeltaAvgTC", "Cost"],
-                    [[_display_name(model_alias), _fmt_pp(model_ref["delta_acc_pp"], 1), _fmt_float(model_ref["delta_avg_tool_calls"], 2), _fmt_float(model_ref["cost"], 1)]],
                 )
-        else:
-            multi_ref = WHEN2TOOL_MULTI_SUMMARY_REFERENCE.get(model_alias)
-            if multi_ref:
-                print("When2Tool 表9参考（当前模型，multi-hop，Best Probe&Prefill 相对 Default）:")
-                _print_table(
-                    ["模型", "DefaultAcc", "DefaultTC", "BestPPAcc", "BestPPTC", "DeltaTC"],
-                    [
+        _print_table(["tau", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], compare_rows)
+        if subset == "single_hop" and any(abs(float(row["threshold"]) - 0.5) < 1e-6 for row in rows):
+            print("分难度（single-hop 表4，when2tool 为六模型平均；tau=0.5）:")
+            diff_compare_rows: list[list[Any]] = []
+            overall_t05 = next((row for row in rows if abs(float(row["threshold"]) - 0.5) < 1e-6), None)
+            diff_rows = difficulty_rows_by_threshold.get(_threshold_key(0.5), {})
+            for difficulty in ["easy", "medium", "hard", "overall"]:
+                ours_row = overall_t05 if difficulty == "overall" else diff_rows.get(difficulty)
+                if ours_row:
+                    diff_compare_rows.append(
                         [
-                            _display_name(model_alias),
-                            f"{multi_ref['default_acc_pct']:.1f}%",
-                            multi_ref["default_tc"],
-                            f"{multi_ref['probe_acc_pct']:.1f}%",
-                            multi_ref["probe_tc"],
-                            f"{multi_ref['probe_delta_tc_pct']:.1f}%",
+                            difficulty,
+                            "ours",
+                            _fmt_pp(ours_row.get("delta_acc_pp"), 2),
+                            _fmt_float(ours_row.get("delta_avg_tool_calls")),
+                            _fmt_defined(ours_row.get("acc_cost_per_saved_call"), 2),
                         ]
-                    ],
-                )
-        print(
-            f"当前 sweep 最大工具节省: tau={best_reduction['threshold']} ToolCallReduction="
-            f"{_fmt_float(best_reduction.get('tool_call_reduction_percent'), 2)}%, DeltaAcc={_fmt_pp(best_reduction.get('delta_acc_pp'), 2)}；"
-            f"最大准确率增量: tau={best_acc_delta['threshold']} DeltaAcc={_fmt_pp(best_acc_delta.get('delta_acc_pp'), 2)}。"
-        )
-        print(f"输出文件: {out_dir / 'delta_sweep_summary.csv'}, {out_dir / 'delta_report.md'}, {out_dir / 'delta_tradeoff.png'}")
-        _print_metric_glossary("delta")
+                    )
+                ref = WHEN2TOOL_COST_AVG_REFERENCE.get(difficulty)
+                if ref:
+                    diff_compare_rows.append(
+                        [
+                            difficulty,
+                            "when2tool",
+                            _fmt_pp(ref["delta_acc_pp"], 1),
+                            _fmt_float(ref["delta_avg_tool_calls"], 2),
+                            _fmt_defined(ref["cost"], 1),
+                        ]
+                    )
+            if diff_compare_rows:
+                _print_table(["difficulty", "source", "DeltaAcc", "DeltaTC(avg)", "DeltaAcc/-DeltaTC"], diff_compare_rows)
+        print("保存但不打印: Base/PP 绝对指标、ToolCallReduction%、工具决策 delta、delta_sweep_summary.csv、delta_report.md、delta_tradeoff.png")
 
 
 def _maybe_float(value: Any) -> Any:
