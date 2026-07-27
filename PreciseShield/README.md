@@ -158,9 +158,10 @@ python PreciseShield/ps_discover_single_type_neurons.py --model-alias qwen3-4b-i
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/PS_TDN_neurons.jsonl
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/saliency_scores.pt
 ../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/single_type_by_subset/*.png
+../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/single_type_by_subset/ps_layer_top10_saliency_heatmap_<subset>_<A|B|C>.png
 ```
 
-做法：只读 train activation。每个 task type 内分别计算 `D_call` 和 `D_direct`，逐层 `TopK(S_call) \ TopK(S_direct)`。如果某类型的 0/1 标签数不足，直接报错，不改公式。
+做法：只读 train activation。每个 task type 内分别计算 `D_call` 和 `D_direct`，逐层 `TopK(S_call) \ TopK(S_direct)`。如果某类型的 0/1 标签数不足，直接报错，不改公式。新增的 `ps_layer_top10_saliency_heatmap` 按 PreciseShield 的 `ffn_intermediate` 神经元定义逐层展示 `S_call` 前 10% 神经元的 saliency 分数。
 
 ## PS-6：跨类型共享神经元
 

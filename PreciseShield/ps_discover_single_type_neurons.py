@@ -30,6 +30,10 @@ from cttn.paths import ensure_dir
 from cttn.progress import progress
 
 
+LAYER_TOP_SCORE_RATIO = 0.10
+HARDWARE_ONLY_PARAM_KEYS = {"device"}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="PreciseShield stage 5: discover A/B/C tool-call neurons with saliency set difference."
@@ -278,6 +282,60 @@ def plot_saliency_rows(rows: list[dict[str, Any]], out_path: Path, top_n: int, t
     plt.close(fig)
 
 
+def plot_layer_top_saliency_heatmap(
+    *,
+    score_pack: dict[str, dict[str, torch.Tensor]],
+    module_meta: list[dict[str, Any]],
+    out_path: Path,
+    score_field: str,
+    score_label: str,
+    title: str,
+    ratio: float = LAYER_TOP_SCORE_RATIO,
+) -> None:
+    ordered_meta = sorted(module_meta, key=lambda meta: (int(meta["layer"]), str(meta["key"])))
+    row_values: list[torch.Tensor] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for meta in ordered_meta:
+        key = meta["key"]
+        scores = score_pack.get(key, {}).get(score_field)
+        if scores is None:
+            continue
+        values = scores.detach().float().cpu()
+        k = max(1, int(values.numel() * ratio))
+        k = min(k, values.numel())
+        top_values = torch.topk(values, k).values
+        row_values.append(top_values)
+        row_labels.append(f"L{int(meta['layer'])}.{INTERMEDIATE_MODULE}")
+        max_cols = max(max_cols, k)
+    if not row_values or max_cols <= 0:
+        return
+
+    matrix = torch.full((len(row_values), max_cols), float("nan"), dtype=torch.float32)
+    for row_idx, values in enumerate(row_values):
+        matrix[row_idx, : values.numel()] = values
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix.numpy(), aspect="auto", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel(f"Neuron rank within top {int(ratio * 100)}% of each layer")
+    ax.set_ylabel("Layer / FFN neuron space")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label=score_label)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def write_counts_csv(rows: list[dict[str, Any]], path: Path, field: str) -> None:
     counts = Counter(row[field] for row in rows)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,15 +347,104 @@ def write_counts_csv(rows: list[dict[str, Any]], path: Path, field: str) -> None
 
 
 def expected_viz(viz_dir: Path, subset: str) -> list[Path]:
-    return [viz_dir / f"{subset}_ps_density_heatmap.png"] + [
-        viz_dir / f"ps_tdn_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES
-    ]
+    return (
+        [viz_dir / f"{subset}_ps_density_heatmap.png"]
+        + [viz_dir / f"ps_tdn_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+        + [viz_dir / f"ps_layer_top10_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+    )
+
+
+def expected_layer_top10_viz(viz_dir: Path, subset: str) -> list[Path]:
+    return [viz_dir / f"ps_layer_top10_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
 
 
 def clean_viz(viz_dir: Path, subset: str) -> None:
     for path in expected_viz(viz_dir, subset):
         if path.exists():
             path.unlink()
+
+
+def params_match_or_hardware_compatible(existing: dict[str, Any], expected: dict[str, Any]) -> bool:
+    if existing == expected:
+        return True
+    existing_core = {k: v for k, v in existing.items() if k not in HARDWARE_ONLY_PARAM_KEYS}
+    expected_core = {k: v for k, v in expected.items() if k not in HARDWARE_ONLY_PARAM_KEYS}
+    return existing_core == expected_core
+
+
+def can_backfill_from_scores(subset_dir: Path, params: dict[str, Any]) -> bool:
+    manifest_path = subset_dir / "manifest.json"
+    if not manifest_path.exists():
+        return False
+    manifest = read_json(manifest_path)
+    if not params_match_or_hardware_compatible(manifest.get("params", {}), params):
+        return False
+    expected = [subset_dir / task_type / "PS_TDN_neurons.jsonl" for task_type in TASK_TYPES]
+    expected.extend(subset_dir / task_type / "saliency_scores.pt" for task_type in TASK_TYPES)
+    expected.append(subset_dir / "module_meta.json")
+    return all(path.exists() for path in expected)
+
+
+def backfill_layer_top10_visualizations(
+    *,
+    subset_dir: Path,
+    viz_dir: Path,
+    subset: str,
+    params: dict[str, Any],
+) -> bool:
+    target_paths = expected_layer_top10_viz(viz_dir, subset)
+    if all(path.exists() for path in target_paths):
+        return False
+    if not can_backfill_from_scores(subset_dir, params):
+        return False
+
+    layer_top10_paths: dict[str, str] = {}
+    for task_type in TASK_TYPES:
+        scores_payload = torch.load(subset_dir / task_type / "saliency_scores.pt", map_location="cpu")
+        out_path = viz_dir / f"ps_layer_top10_saliency_heatmap_{subset}_{task_type}.png"
+        plot_layer_top_saliency_heatmap(
+            score_pack=scores_payload["scores"],
+            module_meta=scores_payload["module_meta"],
+            out_path=out_path,
+            score_field="call_saliency",
+            score_label="PreciseShield call saliency",
+            title=f"{subset} Type {task_type}: top 10% PS saliency by layer",
+        )
+        layer_top10_paths[task_type] = str(out_path)
+
+    summary_path = subset_dir / "summary.json"
+    manifest_path = subset_dir / "manifest.json"
+    summary = read_json(summary_path) if summary_path.exists() else {"subset": subset}
+    summary.setdefault("visualizations", {})
+    summary["visualizations"]["layer_top10_saliency_heatmaps"] = layer_top10_paths
+    write_json(summary_path, summary)
+    manifest = read_json(manifest_path)
+    manifest["params"] = params
+    manifest["summary"] = summary
+    write_json(manifest_path, manifest)
+    print(f"Backfilled layer top-10% PreciseShield saliency visualizations: {subset_dir}")
+    return True
+
+
+def should_skip_hardware_compatible(
+    subset_dir: Path,
+    params: dict[str, Any],
+    expected_files: list[Path],
+    *,
+    overwrite: bool,
+    clean: bool,
+) -> bool:
+    if overwrite or clean:
+        return False
+    manifest_path = subset_dir / "manifest.json"
+    files = [manifest_path, *expected_files]
+    if not all(path.exists() for path in files):
+        return False
+    manifest = read_json(manifest_path)
+    if params_match_or_hardware_compatible(manifest.get("params", {}), params):
+        print(f"Skip existing output: {subset_dir}")
+        return True
+    return False
 
 
 def main() -> None:
@@ -326,6 +473,14 @@ def main() -> None:
         ] + expected_viz(viz_dir, subset)
         if args.clean:
             clean_viz(viz_dir, subset)
+        if should_skip_hardware_compatible(
+            subset_dir,
+            params,
+            expected_files,
+            overwrite=args.overwrite,
+            clean=args.clean,
+        ):
+            continue
         if should_skip(
             subset_dir,
             params,
@@ -334,12 +489,20 @@ def main() -> None:
             clean=args.clean,
         ):
             continue
+        if (not args.overwrite) and (not args.clean) and backfill_layer_top10_visualizations(
+            subset_dir=subset_dir,
+            viz_dir=viz_dir,
+            subset=subset,
+            params=params,
+        ):
+            continue
 
         payload = torch.load(activation_path, map_location="cpu")
         meta_rows = read_jsonl(meta_path)
         module_meta = payload["module_meta"]
         rows_by_type: dict[str, list[dict[str, Any]]] = {}
         summary = {"subset": subset, "task_types": {}, "visualizations": {}}
+        layer_top10_saliency_heatmaps: dict[str, str] = {}
 
         for task_type in TASK_TYPES:
             rows, type_summary, score_pack = selected_rows_for_type(
@@ -370,13 +533,25 @@ def main() -> None:
             write_json(out_dir / "summary.json", type_summary)
             heatmap_path = viz_dir / f"ps_tdn_saliency_heatmap_{subset}_{task_type}.png"
             plot_saliency_rows(rows, heatmap_path, args.heatmap_top_n, f"{subset} Type {task_type} PS-TDN")
+            layer_top10_path = viz_dir / f"ps_layer_top10_saliency_heatmap_{subset}_{task_type}.png"
+            plot_layer_top_saliency_heatmap(
+                score_pack=score_pack,
+                module_meta=module_meta,
+                out_path=layer_top10_path,
+                score_field="call_saliency",
+                score_label="PreciseShield call saliency",
+                title=f"{subset} Type {task_type}: top 10% PS saliency by layer",
+            )
             type_summary["saliency_heatmap"] = str(heatmap_path)
+            type_summary["layer_top10_saliency_heatmap"] = str(layer_top10_path)
+            layer_top10_saliency_heatmaps[task_type] = str(layer_top10_path)
             summary["task_types"][task_type] = type_summary
             print(f"{subset}/type {task_type}: selected {len(rows)} PS-TDN neurons")
 
         density_path = viz_dir / f"{subset}_ps_density_heatmap.png"
         plot_density(rows_by_type, module_meta, density_path)
         summary["visualizations"]["density_heatmap"] = str(density_path)
+        summary["visualizations"]["layer_top10_saliency_heatmaps"] = layer_top10_saliency_heatmaps
         write_json(subset_dir / "module_meta.json", module_meta)
         write_json(subset_dir / "summary.json", summary)
         write_json(subset_dir / "manifest.json", {"params": params, "summary": summary})
