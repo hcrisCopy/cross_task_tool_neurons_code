@@ -204,7 +204,24 @@ test/manifest.json
 
 ## 5. 训练二分类探针
 
-训练方法照搬 When2Tool 的 `src/train_probe.py`，只把输入从 all-layer hidden states 换成 `phi_r(x)`：
+不同方案的核心差异不是分类器，而是送进 probe 的特征向量。统一记为：
+
+```text
+u_m,s,r(x) in R^d
+```
+
+其中 `m` 是模型，`s` 是 `single_hop` 或 `multi_hop`，`r` 是特征来源。所有方案都用同一个模型专属 `tool_necessary` 作为标签，只用 train 拟合 probe，test 只报告和后续评测。
+
+| 方案 | probe 输入怎么构造 | 训练方式 |
+|---|---|---|
+| When2Tool 原始 hidden-state probe | 对每条样本做一次模型前向，取开始生成前最后一个输入 token；收集所有 Transformer 层的 hidden state `H_l(x)[t_end]`，按层顺序拼接成 `[H_1; H_2; ...; H_L]`，作为全层 hidden states 特征。 | `StandardScaler + L2 LogisticRegression` 训练二分类 probe，标签是该模型自己的 `tool_necessary`。 |
+| Safety Kernel / CTD probe | 先由 Safety Kernel/SCAR 在 A/B/C 中挖掘 `TDN`，再取交集得到 `CTD`。ProbePrefill 读取 `CTD_neurons.jsonl`，从 stage4 保存的 FFN 线性模块输出 activation 中，取最后输入 token 上这些 `(layer, module, index)` 坐标的值，按 CTD 顺序拼成 `phi_safety_kernel(x)`。 | 分类器完全照搬 When2Tool；只是输入从全层 hidden states 换成 CTD 神经元 activation。 |
+| PreciseShield / PS-CTD probe | 先由 PreciseShield 根据 FFN intermediate `h` 的重要性得分挖掘 A/B/C 的 `PS_TDN`，再取交集得到 `PS_CTD`。ProbePrefill 读取 `PS_CTD_neurons.jsonl`，从 PS-4 保存的 `down_proj` 输入处 intermediate `h` 中，取最后输入 token 上这些 `(layer, index)` 坐标的值，按 PS-CTD 顺序拼成 `phi_precise_shield(x)`。 | 分类器完全照搬 When2Tool；只是输入换成 PS-CTD intermediate 神经元 activation。 |
+| 后续新增探测方法 | 新方法只需要产出 train/test activation 和共享神经元列表，并在 `ProbePrefill` 中定义如何由神经元坐标抽出 `phi_r(x)`。 | 继续复用同一套 `StandardScaler + L2 LogisticRegression`、同一套 test 评测和 Probe&Prefill。 |
+
+因此本项目的比较口径是固定的：When2Tool 原始方法用“last token 拼接全层 hidden states”，本方案系列用“last token 上被不同神经元探测方法选中的神经元 activation”。训练器、标签、train/test 划分和后续阈值评测保持一致。
+
+训练实现照搬 When2Tool 的 `src/train_probe.py`：
 
 - 特征先用 `StandardScaler` 标准化。
 - 分类器用 L2 Logistic Regression。
