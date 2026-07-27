@@ -469,28 +469,55 @@ def run_data_parallel(
         "subsets": {},
     }
     for subset in subset_values(args.subset):
-        _features, meta_rows, _summary = load_test_features(root, args.model_alias, subset)
-        shard_sets = shard_indices(len(meta_rows), len(gpus))
-        run_root = make_dp_run_root(root, stage="pp_03", model_alias=args.model_alias, subset=subset)
-        worker_roots: list[Path] = []
-        for index, indices in enumerate(shard_sets):
-            worker_root = run_root / f"shard_{index:02d}"
-            prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
-            prepare_feature_tensor_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
-            copy_probe_artifacts(root, worker_root, model_alias=args.model_alias, subset=subset)
-            worker_roots.append(worker_root)
-        total = len(meta_rows) * args.n_runs * len(thresholds)
-        run_data_parallel_workers(
-            script_path=Path(__file__).resolve(),
-            args=args,
-            gpus=gpus,
-            subset=subset,
-            worker_roots=worker_roots,
-            total_progress=total,
-            desc=f"PP-3 {args.model_alias}/{subset}",
-        )
-        root_manifest["subsets"][subset] = {}
+        _features, meta_rows, feature_summary = load_test_features(root, args.model_alias, subset)
+        probe_manifest_path = probe_dir(root, args.model_alias, subset) / "manifest.json"
+        probe_manifest = read_json(probe_manifest_path) if probe_manifest_path.exists() else {}
+        pending_thresholds: list[float] = []
         for threshold in thresholds:
+            params = expected_params(
+                args,
+                subset=subset,
+                threshold=threshold,
+                prefill_mode=prefill_mode,
+                tool_format=tool_format,
+                model_path=model_path,
+                probe_manifest=probe_manifest,
+                feature_summary=feature_summary,
+            )
+            params["data_parallel"] = {"num_workers": len(gpus), "gpus": gpus}
+            tag = tag_for(threshold, args.temperature, prefill_mode)
+            final_dir = output_dir(root, args.model_alias, subset, tag)
+            expected = [final_dir / "summary.json", final_dir / "per_task.jsonl", final_dir / "outputs.json"]
+            if not should_skip(final_dir, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "outputs")):
+                pending_thresholds.append(threshold)
+
+        if pending_thresholds:
+            shard_sets = shard_indices(len(meta_rows), len(gpus))
+            run_root = make_dp_run_root(root, stage="pp_03", model_alias=args.model_alias, subset=subset)
+            worker_roots: list[Path] = []
+            for index, indices in enumerate(shard_sets):
+                worker_root = run_root / f"shard_{index:02d}"
+                prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+                prepare_feature_tensor_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+                copy_probe_artifacts(root, worker_root, model_alias=args.model_alias, subset=subset)
+                worker_roots.append(worker_root)
+            worker_args = argparse.Namespace(**vars(args))
+            worker_args.thresholds = ",".join(f"{threshold:g}" for threshold in pending_thresholds)
+            total = len(meta_rows) * args.n_runs * len(pending_thresholds)
+            run_data_parallel_workers(
+                script_path=Path(__file__).resolve(),
+                args=worker_args,
+                gpus=gpus,
+                subset=subset,
+                worker_roots=worker_roots,
+                total_progress=total,
+                desc=f"PP-3 {args.model_alias}/{subset}",
+                shard_sizes=[len(indices) for indices in shard_sets],
+            )
+        else:
+            print(f"PP-3 {args.model_alias}/{subset}: all requested thresholds already complete; skip worker launch.")
+        root_manifest["subsets"][subset] = {}
+        for threshold in pending_thresholds:
             summary = merge_shard_outputs(
                 args=args,
                 subset=subset,
@@ -501,6 +528,14 @@ def run_data_parallel(
                 model_path=model_path,
                 tool_format=tool_format,
             )
+            root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
+                "overall", summary.get("mean_std", {}).get("overall", {})
+            )
+        for threshold in thresholds:
+            summary_path = output_dir(root, args.model_alias, subset, tag_for(threshold, args.temperature, prefill_mode)) / "summary.json"
+            if not summary_path.exists():
+                raise FileNotFoundError(f"Missing merged Probe&Prefill summary after data-parallel run: {summary_path}")
+            summary = read_json(summary_path)
             root_manifest["subsets"][subset][tag_for(threshold, args.temperature, prefill_mode)] = summary.get(
                 "overall", summary.get("mean_std", {}).get("overall", {})
             )

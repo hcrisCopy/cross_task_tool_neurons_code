@@ -686,7 +686,30 @@ def run_activation_mask_data_parallel(
     tool_format: str,
 ) -> dict[str, Any]:
     gpus = parse_gpus(args.gpus)
+    out_dir = causal_dir(root, args.model_alias, subset)
     feature_rows = feature_meta(root, args.model_alias, subset, "test")
+    params = activation_mask_params(
+        args,
+        subset=subset,
+        root=root,
+        model_path=model_path,
+        neurons_dir=neurons_dir,
+        tool_format=tool_format,
+        feature_rows=feature_rows,
+    )
+    params["data_parallel"] = {"num_workers": len(gpus), "gpus": gpus}
+    expected = [out_dir / "summary_table.csv", out_dir / "cross_type_summary.csv"]
+    if should_skip(out_dir / "activation_mask", params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "causal")):
+        print(f"PP-5 {args.model_alias}/{subset}: activation mask already complete; skip worker launch.")
+        return read_json(out_dir / "activation_mask" / "manifest.json")
+    if args.clean:
+        causal_root = pp_subdir(root, "causal")
+        remove_files([out_dir / task_type for task_type in TASK_TYPES], allowed_root=causal_root)
+        remove_files(
+            [out_dir / "summary_table.csv", out_dir / "cross_type_summary.csv", out_dir / "random_mask_neurons.jsonl"],
+            allowed_root=causal_root,
+        )
+
     shard_sets = shard_indices(len(feature_rows), len(gpus))
     run_root = make_dp_run_root(root, stage="pp_05_activation_mask", model_alias=args.model_alias, subset=subset)
     worker_roots: list[Path] = []
@@ -704,6 +727,7 @@ def run_activation_mask_data_parallel(
         worker_roots=worker_roots,
         total_progress=total * len(interventions),
         desc=f"PP-5 {args.model_alias}/{subset}",
+        shard_sizes=[len(indices) for indices in shard_sets],
         extra_cli=["--skip-probe-controls"],
     )
     return merge_activation_mask_shards(

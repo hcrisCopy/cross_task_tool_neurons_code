@@ -626,6 +626,7 @@ def run_data_parallel_workers(
     worker_roots: list[Path],
     total_progress: int,
     desc: str,
+    shard_sizes: list[int] | None = None,
     extra_cli: list[str] | None = None,
 ) -> None:
     base_cli = namespace_to_cli(args, exclude={"gpus", "output_root", "subset"})
@@ -639,6 +640,12 @@ def run_data_parallel_workers(
         finally:
             lines.put((index, None))
 
+    size_text = f", shard_sizes={shard_sizes}" if shard_sizes is not None else ""
+    print(
+        f"{desc}: launching {len(gpus)} data-parallel workers on GPUs {','.join(gpus)}"
+        f"{size_text}, total_progress={total_progress} tasks",
+        flush=True,
+    )
     for index, (gpu, worker_root) in enumerate(zip(gpus, worker_roots)):
         cmd = [
             sys.executable,
@@ -656,6 +663,7 @@ def run_data_parallel_workers(
             str(len(gpus)),
             *(extra_cli or []),
         ]
+        print(f"{desc}: worker {index} -> GPU {gpu}, root={worker_root}", flush=True)
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu
         env["PYTHONUNBUFFERED"] = "1"

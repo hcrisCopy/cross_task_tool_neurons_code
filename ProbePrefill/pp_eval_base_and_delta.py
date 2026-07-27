@@ -369,32 +369,61 @@ def run_data_parallel(
     }
     for subset in subset_values(args.subset):
         meta_rows = feature_meta(root, args.model_alias, subset)
-        shard_sets = shard_indices(len(meta_rows), len(gpus))
-        run_root = make_dp_run_root(root, stage="pp_04", model_alias=args.model_alias, subset=subset)
-        worker_roots: list[Path] = []
-        for index, indices in enumerate(shard_sets):
-            worker_root = run_root / f"shard_{index:02d}"
-            prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
-            worker_roots.append(worker_root)
-        run_data_parallel_workers(
-            script_path=Path(__file__).resolve(),
-            args=args,
-            gpus=gpus,
+        base_out = base_dir(root, args.model_alias, subset)
+        params = expected_base_params(
+            args,
             subset=subset,
-            worker_roots=worker_roots,
-            total_progress=len(meta_rows) * args.n_runs,
-            desc=f"PP-4 {args.model_alias}/{subset}",
-            extra_cli=["--_skip-delta"],
-        )
-        summary = merge_base_shards(
-            args=args,
-            subset=subset,
-            root=root,
-            worker_roots=worker_roots,
             model_path=model_path,
             tool_format=tool_format,
-            thresholds=thresholds,
+            feature_meta_rows=meta_rows,
         )
+        params["data_parallel"] = {"num_workers": len(gpus), "gpus": gpus}
+        expected = [base_out / "summary.json", base_out / "per_task.jsonl", base_out / "outputs.json"]
+        if should_skip(base_out, params, expected, overwrite=args.overwrite, clean=args.clean, allowed_root=pp_subdir(root, "outputs")):
+            summary = read_json(base_out / "summary.json")
+            write_eval_case_report(
+                out_dir=base_out,
+                summary=summary,
+                model_alias=args.model_alias,
+                subset=subset,
+                method="Base/Default",
+                threshold=None,
+                temperature=None,
+                prefill_mode="none",
+                tool_format=tool_format,
+                prefill_stats=None,
+                comparison_thresholds=thresholds,
+                comparison_temperature=args.temperature,
+            )
+            print(f"PP-4 {args.model_alias}/{subset}: Base already complete; skip worker launch.")
+        else:
+            shard_sets = shard_indices(len(meta_rows), len(gpus))
+            run_root = make_dp_run_root(root, stage="pp_04", model_alias=args.model_alias, subset=subset)
+            worker_roots: list[Path] = []
+            for index, indices in enumerate(shard_sets):
+                worker_root = run_root / f"shard_{index:02d}"
+                prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
+                worker_roots.append(worker_root)
+            run_data_parallel_workers(
+                script_path=Path(__file__).resolve(),
+                args=args,
+                gpus=gpus,
+                subset=subset,
+                worker_roots=worker_roots,
+                total_progress=len(meta_rows) * args.n_runs,
+                desc=f"PP-4 {args.model_alias}/{subset}",
+                shard_sizes=[len(indices) for indices in shard_sets],
+                extra_cli=["--_skip-delta"],
+            )
+            summary = merge_base_shards(
+                args=args,
+                subset=subset,
+                root=root,
+                worker_roots=worker_roots,
+                model_path=model_path,
+                tool_format=tool_format,
+                thresholds=thresholds,
+            )
         comparisons = build_delta_tables(args, root=root, subset=subset, thresholds=thresholds, prefill_mode=prefill_mode)
         root_manifest["subsets"][subset] = {
             "base_overall": summary.get("overall", summary.get("mean_std", {}).get("overall", {})),
