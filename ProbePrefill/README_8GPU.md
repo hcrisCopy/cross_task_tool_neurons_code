@@ -17,6 +17,12 @@
 ../cross_task_tool_neurons_data/probe_prefill/
 ```
 
+默认 `--probe-method safety_kernel` 会复用已有 Safety Kernel/CTD 产物与 legacy 输出目录；`--probe-method precise_shield` 会读取 PreciseShield 的 PS-4/5/6 产物，并把 ProbePrefill 输出隔离到：
+
+```text
+../cross_task_tool_neurons_data/probe_prefill/precise_shield/
+```
+
 ## 运行顺序
 
 推荐按下面 5 条命令依次执行。每条命令内部都会先跑 `single_hop`，再跑 `multi_hop`。
@@ -27,20 +33,36 @@ PP-1 -> PP-2 -> PP-3 -> PP-4 -> PP-5
 
 PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP-4。
 
-## PP-1 构建全量 CTD Probe 特征
+## PP-1 构建全量共享神经元 Probe 特征
 
-PP-1 只读取阶段 4 activation、阶段 6 CTD 神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。
+PP-1 只读取已经完成的 activation、共享神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。PP-1 本身没有多卡/单卡差异；下面两条都是单卡正式实验可直接运行的命令。
+
+Safety Kernel / CTD 单卡指令：
 
 ```text
-python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
-## PP-2 训练 CTD Logistic Probe
-
-PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。
+PreciseShield / PS-CTD 单卡指令：
 
 ```text
-python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method precise_shield --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
+```
+
+## PP-2 训练共享神经元 Logistic Probe
+
+PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。单跳、多跳会分别训练各自的 probe。
+
+Safety Kernel / CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+PreciseShield / PS-CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method precise_shield --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 终端打印按论文表格版式：`ours` / `when2tool` 两行对比。single-hop 会额外打印 easy/medium/hard AUROC。

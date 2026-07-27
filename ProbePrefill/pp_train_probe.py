@@ -11,10 +11,19 @@ from sklearn.preprocessing import StandardScaler
 
 from pp_common import (
     PP_STAGE_VERSION,
+    PROBE_METHOD_SAFETY_KERNEL,
     flatten_probe_predictions,
     grouped_classification_metrics,
+    method_feature_definition,
+    method_feature_description,
+    method_feature_set,
+    method_label,
+    method_train_probe_name,
+    normalize_probe_method,
     pp_subdir,
     print_subset_plan,
+    probe_method_choices,
+    probe_method_root,
     probe_prefill_root,
     read_json,
     read_jsonl,
@@ -28,9 +37,10 @@ from pp_reporting import write_probe_training_report
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ProbePrefill stage 2: train a logistic probe on CTD activations.")
+    parser = argparse.ArgumentParser(description="ProbePrefill stage 2: train a logistic probe on shared-neuron activations.")
     parser.add_argument("--model-alias", required=True)
     parser.add_argument("--output-root", default=None)
+    parser.add_argument("--probe-method", choices=probe_method_choices(), default=PROBE_METHOD_SAFETY_KERNEL)
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--reg", type=float, default=10000.0, help="L2 regularization lambda; sklearn C=1/reg.")
     parser.add_argument("--max-iter", type=int, default=2000)
@@ -70,7 +80,7 @@ def expected_params(
     train_summary: dict[str, Any],
     test_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    legacy_params = {
         "stage": "pp_02_train_ctd_probe",
         "stage_version": PP_STAGE_VERSION,
         "model_alias": args.model_alias,
@@ -81,6 +91,16 @@ def expected_params(
         "threshold": args.threshold,
         "feature_train_summary": train_summary,
         "feature_test_summary": test_summary,
+    }
+    if args.probe_method == PROBE_METHOD_SAFETY_KERNEL:
+        return legacy_params
+    return {
+        **legacy_params,
+        "stage": "pp_02_train_probe",
+        "probe_method": args.probe_method,
+        "probe_method_label": method_label(args.probe_method),
+        "feature_set": method_feature_set(args.probe_method),
+        "feature_definition": method_feature_definition(args.probe_method),
     }
 
 
@@ -147,10 +167,15 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
     test_prob = predict_probs(scaler, clf, X_test)
     train_metrics = grouped_classification_metrics(y_train, train_prob, meta_train, threshold=args.threshold)
     test_metrics = grouped_classification_metrics(y_test, test_prob, meta_test, threshold=args.threshold)
+    feature_set = method_feature_set(args.probe_method)
     results = {
         "model_alias": args.model_alias,
         "subset": subset,
-        "method": "CTD logistic probe",
+        "method": method_train_probe_name(args.probe_method),
+        "probe_method": args.probe_method,
+        "probe_method_label": method_label(args.probe_method),
+        "feature_set": feature_set,
+        "feature_description": method_feature_description(args.probe_method),
         "feature_dim": int(X_train.shape[1]),
         "n_train": int(X_train.shape[0]),
         "n_test": int(X_test.shape[0]),
@@ -162,7 +187,7 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
         "test": test_metrics,
         "test_auroc": test_metrics["overall"]["auroc"],
         "test_accuracy": test_metrics["overall"]["accuracy"],
-        "selected_by": "single fixed CTD feature set; no test-set layer search",
+        "selected_by": f"single fixed {feature_set} feature set; no test-set layer search",
     }
     torch.save(
         {
@@ -173,7 +198,8 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
             "C": c_value,
             "reg": args.reg,
             "mode": "no_reasoning",
-            "feature_set": "CTD",
+            "probe_method": args.probe_method,
+            "feature_set": feature_set,
             "feature_dim": int(X_train.shape[1]),
             "neuron_rows": neuron_rows,
             "train_feature_sha256": stable_sha256(train_summary),
@@ -194,7 +220,7 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
         test_predictions=test_predictions,
     )
     print(
-        f"{subset}: CTD probe AUROC={results['test']['overall']['auroc']} "
+        f"{subset}: {feature_set} probe AUROC={results['test']['overall']['auroc']} "
         f"Acc={results['test']['overall']['accuracy']:.4f} dim={X_train.shape[1]}"
     )
     return results
@@ -202,14 +228,17 @@ def train_subset(args: argparse.Namespace, *, subset: str, features_root: Path, 
 
 def main() -> None:
     args = parse_args()
+    args.probe_method = normalize_probe_method(args.probe_method)
     if args.reg <= 0:
         raise ValueError("--reg must be positive")
-    root = probe_prefill_root(args.output_root)
+    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     features_root = pp_subdir(root, "features")
     probes_root = pp_subdir(root, "probes")
     root_manifest: dict[str, Any] = {
-        "stage": "pp_02_train_ctd_probe",
+        "stage": "pp_02_train_ctd_probe" if args.probe_method == PROBE_METHOD_SAFETY_KERNEL else "pp_02_train_probe",
         "stage_version": PP_STAGE_VERSION,
+        "probe_method": args.probe_method,
+        "feature_set": method_feature_set(args.probe_method),
         "model_alias": args.model_alias,
         "subsets": {},
     }

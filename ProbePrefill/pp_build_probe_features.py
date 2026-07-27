@@ -8,11 +8,21 @@ import torch
 
 from pp_common import (
     PP_STAGE_VERSION,
+    PROBE_METHOD_SAFETY_KERNEL,
+    default_method_activations_dir,
+    default_method_neurons_dir,
     features_from_rows,
-    load_ctd_rows,
+    load_shared_neuron_rows,
     load_stage_activations,
-    path_from_config,
+    method_feature_definition,
+    method_feature_description,
+    method_feature_set,
+    method_label,
+    method_neuron_identity,
+    normalize_probe_method,
     print_subset_plan,
+    probe_method_choices,
+    probe_method_root,
     pp_subdir,
     probe_prefill_root,
     read_json,
@@ -28,11 +38,12 @@ from cttn.seeds import derive_allowed_seed, seed_arg_kwargs
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ProbePrefill stage 1: build CTD-neuron activation features.")
+    parser = argparse.ArgumentParser(description="ProbePrefill stage 1: build shared-neuron activation features.")
     parser.add_argument("--model-alias", required=True)
     parser.add_argument("--activations-dir", default=None)
     parser.add_argument("--neurons-dir", default=None)
     parser.add_argument("--output-root", default=None)
+    parser.add_argument("--probe-method", choices=probe_method_choices(), default=PROBE_METHOD_SAFETY_KERNEL)
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--max-train-samples", type=int, default=0)
     parser.add_argument("--max-test-samples", type=int, default=0)
@@ -63,7 +74,7 @@ def feature_params(
     activations_dir: Path,
     neurons_dir: Path,
 ) -> dict[str, Any]:
-    return {
+    legacy_params = {
         "stage": "pp_01_build_ctd_probe_features",
         "stage_version": PP_STAGE_VERSION,
         "model_alias": args.model_alias,
@@ -85,6 +96,19 @@ def feature_params(
         "seed": args.seed,
         "selected_ids_sha256": stable_sha256([row["id"] for row in selected_meta]),
         "feature_definition": "stage4 last-input-token FFN output activation restricted to stage6 CTD neurons",
+    }
+    if args.probe_method == PROBE_METHOD_SAFETY_KERNEL:
+        return legacy_params
+    return {
+        **legacy_params,
+        "stage": "pp_01_build_probe_features",
+        "probe_method": args.probe_method,
+        "probe_method_label": method_label(args.probe_method),
+        "feature_set": method_feature_set(args.probe_method),
+        "feature_description": method_feature_description(args.probe_method),
+        "shared_neuron_count": len(ctd_rows),
+        "shared_neuron_sha256": stable_sha256([method_neuron_identity(row) for row in ctd_rows]),
+        "feature_definition": method_feature_definition(args.probe_method),
     }
 
 
@@ -148,28 +172,39 @@ def build_split(
         "label_summary": summarize_labels(selected_meta),
         "ctd_neuron_count": len(ordered_rows),
     }
+    if args.probe_method != PROBE_METHOD_SAFETY_KERNEL:
+        summary.update(
+            {
+                "probe_method": args.probe_method,
+                "feature_set": method_feature_set(args.probe_method),
+                "shared_neuron_count": len(ordered_rows),
+            }
+        )
     write_json(out_dir / f"{split}_summary.json", summary)
     write_json(out_dir / split / "manifest.json", {"params": params, "summary": summary})
-    print(f"Wrote {subset}/{split} CTD probe features: {out_dir / f'{split}_features.pt'}")
+    print(f"Wrote {subset}/{split} {method_feature_set(args.probe_method)} probe features: {out_dir / f'{split}_features.pt'}")
     return summary
 
 
 def main() -> None:
     args = parse_args()
-    activations_dir = resolve_path(args.activations_dir) if args.activations_dir else path_from_config("activations_dir")
-    neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else path_from_config("neurons_dir")
-    root = probe_prefill_root(args.output_root)
+    args.probe_method = normalize_probe_method(args.probe_method)
+    activations_dir = resolve_path(args.activations_dir) if args.activations_dir else default_method_activations_dir(args.probe_method)
+    neurons_dir = resolve_path(args.neurons_dir) if args.neurons_dir else default_method_neurons_dir(args.probe_method)
+    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     features_root = pp_subdir(root, "features")
     subsets = print_subset_plan(args.subset, stage="PP-1", model_alias=args.model_alias)
     root_manifest: dict[str, Any] = {
-        "stage": "pp_01_build_ctd_probe_features",
+        "stage": "pp_01_build_ctd_probe_features" if args.probe_method == PROBE_METHOD_SAFETY_KERNEL else "pp_01_build_probe_features",
         "stage_version": PP_STAGE_VERSION,
+        "probe_method": args.probe_method,
+        "feature_set": method_feature_set(args.probe_method),
         "model_alias": args.model_alias,
         "subsets": {},
     }
 
     for subset in subsets:
-        ctd_rows = load_ctd_rows(neurons_dir, args.model_alias, subset)
+        ctd_rows = load_shared_neuron_rows(neurons_dir, args.model_alias, subset, args.probe_method)
         subset_summary = {}
         for split in ["train", "test"]:
             subset_summary[split] = build_split(
@@ -182,6 +217,7 @@ def main() -> None:
                 ctd_rows=ctd_rows,
             )
         subset_summary["ctd_neuron_count"] = len(ctd_rows)
+        subset_summary["feature_set"] = method_feature_set(args.probe_method)
         root_manifest["subsets"][subset] = subset_summary
 
     manifest_path = features_root / args.model_alias / "manifest.json"

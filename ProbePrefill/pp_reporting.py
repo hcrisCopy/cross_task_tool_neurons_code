@@ -417,7 +417,14 @@ def write_probe_training_report(
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(out_dir / "probe_metrics_table.csv", classification_rows(results))
-    _write_probe_plots(out_dir=out_dir, train_predictions=train_predictions, test_predictions=test_predictions)
+    feature_set = str(results.get("feature_set") or "CTD")
+    feature_description = str(results.get("feature_description") or f"{feature_set} FFN last-token activations")
+    _write_probe_plots(
+        out_dir=out_dir,
+        train_predictions=train_predictions,
+        test_predictions=test_predictions,
+        feature_set=feature_set,
+    )
 
     model_alias = str(results.get("model_alias", ""))
     subset = str(results.get("subset", ""))
@@ -426,9 +433,9 @@ def write_probe_training_report(
     lines = [
         f"# Probe report: {model_alias}/{subset}",
         "",
-        "## Current CTD probe",
+        f"## Current {feature_set} probe",
         "",
-        f"- Feature set: CTD FFN last-token activations, dim={results.get('feature_dim')}",
+        f"- Feature set: {feature_description}, dim={results.get('feature_dim')}",
         f"- Train/Test: {results.get('n_train')} / {results.get('n_test')}",
         f"- Logistic regression: StandardScaler + L2, reg={results.get('reg')} (C={results.get('C')}), threshold={results.get('threshold')}",
         f"- Test AUROC: {_fmt_float(overall.get('auroc'))}",
@@ -442,7 +449,7 @@ def write_probe_training_report(
     if ref:
         lines.extend(
             [
-                "- Reference uses all-layer pre-generation hidden states, not CTD neuron activations.",
+                f"- Reference uses all-layer pre-generation hidden states, not {feature_set} neuron activations.",
                 f"- Paper AUROC / Acc: {_fmt_float(ref.get('auroc'))} / {_fmt_pct(ref.get('accuracy'))}",
             ]
         )
@@ -461,13 +468,14 @@ def print_probe_training_summary(results: dict[str, Any], ref: dict[str, Any] | 
     model_alias = results.get("model_alias")
     subset = results.get("subset")
     overall = results.get("test", {}).get("overall", {})
-    print("\n=== PP-2 探针训练指标（CTD 神经元特征）===")
+    feature_set = str(results.get("feature_set") or "CTD")
+    print(f"\n=== PP-2 探针训练指标（{feature_set} 神经元特征）===")
     print(
         f"条件: model={model_alias} ({_display_name(str(model_alias))}), subset={subset}, "
         f"tau={results.get('threshold')}, reg={results.get('reg')}, max_iter={results.get('max_iter', 'unknown')}, "
         f"feature_dim={results.get('feature_dim')}"
     )
-    print(f"对齐论文: {paper_probe_table_name(str(subset))}；ours=CTD 神经元 probe，when2tool=hidden-state probe。")
+    print(f"对齐论文: {paper_probe_table_name(str(subset))}；ours={feature_set} 神经元 probe，when2tool=hidden-state probe。")
     _print_paper_metric_notes(["AUROC", "Accuracy"])
     headers = ["source", "AUROC", "Accuracy"]
     ours_row = ["ours", _fmt_float(overall.get("auroc")), _fmt_float(overall.get("accuracy"))]
@@ -499,7 +507,13 @@ def print_probe_training_summary(results: dict[str, Any], ref: dict[str, Any] | 
     )
 
 
-def _write_probe_plots(*, out_dir: Path, train_predictions: list[dict[str, Any]], test_predictions: list[dict[str, Any]]) -> None:
+def _write_probe_plots(
+    *,
+    out_dir: Path,
+    train_predictions: list[dict[str, Any]],
+    test_predictions: list[dict[str, Any]],
+    feature_set: str = "CTD",
+) -> None:
     try:
         import matplotlib
 
@@ -523,7 +537,7 @@ def _write_probe_plots(*, out_dir: Path, train_predictions: list[dict[str, Any]]
     ax.plot([0, 1], [0, 1], color="#999999", linestyle="--", linewidth=1)
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
-    ax.set_title("CTD Probe ROC")
+    ax.set_title(f"{feature_set} Probe ROC")
     ax.grid(alpha=0.25)
     ax.legend()
     fig.tight_layout()
@@ -600,7 +614,7 @@ def write_eval_case_report(
     if ref:
         lines.extend(
             [
-                "- Reference uses hidden-state Probe&Prefill from the paper; current run uses CTD neuron features.",
+                f"- Reference uses hidden-state Probe&Prefill from the paper; current run uses {method} neuron features.",
                 f"- Paper Base(Default): Acc={ref['base_accuracy_pct']:.1f}%, TotalTC={ref['base_total_tool_calls']}",
                 f"- Paper Probe&Prefill tau={ref['threshold']}: Acc={ref['probe_accuracy_pct']:.1f}%, TotalTC={ref['probe_total_tool_calls']}, DeltaAcc={ref['delta_acc_pp']:.1f}pp, ToolCallReduction={ref['tool_call_reduction_percent']:.1f}%",
                 "",
@@ -851,6 +865,7 @@ def write_delta_sweep_report(
     subset: str,
     prefill_mode: str,
     temperature: float,
+    method: str = "CTD-Probe&Prefill",
 ) -> None:
     rows: list[dict[str, Any]] = []
     difficulty_rows_by_threshold: dict[float, dict[str, dict[str, Any]]] = {}
@@ -893,7 +908,7 @@ def write_delta_sweep_report(
     lines = [
         f"# Delta report: {model_alias}/{subset}",
         "",
-        "- All deltas below are CTD-Probe&Prefill minus Base/Default on the same test ids.",
+        f"- All deltas below are {method} minus Base/Default on the same test ids.",
         "- Positive ToolCallReduction% means fewer total tool calls than Base.",
         "",
         "| tau | BaseAcc | PPAcc | DeltaAcc(pp) | BaseTC | PPTC | ToolCallReduction% | DeltaAvgTC | Cost | Paper DeltaAcc/Reduction |",

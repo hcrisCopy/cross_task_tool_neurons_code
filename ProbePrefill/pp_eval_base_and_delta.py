@@ -15,17 +15,22 @@ import torch
 
 from pp_common import (
     PP_STAGE_VERSION,
+    PROBE_METHOD_SAFETY_KERNEL,
     compare_summaries_to_base,
     is_dp_parent,
     default_prefill_mode,
     infer_tool_format,
     load_model_module,
     load_utils,
+    method_probe_prefill_name,
+    normalize_probe_method,
     path_from_config,
     make_dp_run_root,
     parse_gpus,
     parse_thresholds,
     print_subset_plan,
+    probe_method_choices,
+    probe_method_root,
     prepare_feature_meta_shard,
     pp_subdir,
     probe_prefill_root,
@@ -65,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-dir", default=None)
     parser.add_argument("--when2tool-repo", default=None)
     parser.add_argument("--output-root", default=None)
+    parser.add_argument("--probe-method", choices=probe_method_choices(), default=PROBE_METHOD_SAFETY_KERNEL)
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--thresholds", default="0.5")
     parser.add_argument("--temperature", type=float, default=2.0)
@@ -131,7 +137,7 @@ def expected_base_params(
     tool_format: str,
     feature_meta_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    return {
+    params = {
         "stage": "pp_04_base_evaluation",
         "stage_version": PP_STAGE_VERSION,
         "model_alias": args.model_alias,
@@ -154,6 +160,9 @@ def expected_base_params(
         "tool_format": tool_format,
         "selected_test_ids_sha256": stable_sha256([row["id"] for row in feature_meta_rows]),
     }
+    if args.probe_method != PROBE_METHOD_SAFETY_KERNEL:
+        params["probe_method"] = args.probe_method
+    return params
 
 
 def make_agent(args: argparse.Namespace, *, model_path: Path, w2t_model: Any) -> Any:
@@ -366,6 +375,7 @@ def run_data_parallel(
     root_manifest: dict[str, Any] = {
         "stage": "pp_04_base_evaluation_and_delta",
         "stage_version": PP_STAGE_VERSION,
+        "probe_method": args.probe_method,
         "model_alias": args.model_alias,
         "tool_format": tool_format,
         "prefill_mode": prefill_mode,
@@ -406,7 +416,7 @@ def run_data_parallel(
             run_root = make_dp_run_root(root, stage="pp_04", model_alias=args.model_alias, subset=subset)
             worker_roots: list[Path] = []
             for index, indices in enumerate(shard_sets):
-                worker_root = run_root / f"shard_{index:02d}"
+                worker_root = probe_method_root(run_root / f"shard_{index:02d}", args.probe_method)
                 prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
                 worker_roots.append(worker_root)
             run_data_parallel_workers(
@@ -475,7 +485,7 @@ def build_delta_tables(
             out_manifest=probe_out / "comparison_with_base_manifest.json",
             model_alias=args.model_alias,
             subset=subset,
-            method="CTD-Probe&Prefill",
+            method=method_probe_prefill_name(args.probe_method),
             params=params,
             overwrite=args.overwrite,
         )
@@ -493,18 +503,20 @@ def build_delta_tables(
         subset=subset,
         prefill_mode=prefill_mode,
         temperature=args.temperature,
+        method=method_probe_prefill_name(args.probe_method),
     )
     return out
 
 
 def main() -> None:
     args = parse_args()
+    args.probe_method = normalize_probe_method(args.probe_method)
     if args.n_runs < 1:
         raise ValueError("--n-runs must be >= 1")
     set_single_process_cuda_visible(args.gpus)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    root = probe_prefill_root(args.output_root)
+    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     dataset_root = resolve_path(args.dataset_dir) if args.dataset_dir else path_from_config("modified_dataset_dir")
     model_dataset = dataset_root / args.model_alias
     if not model_dataset.exists():
@@ -530,6 +542,7 @@ def main() -> None:
             root_manifest = {
                 "stage": "pp_04_base_evaluation_and_delta",
                 "stage_version": PP_STAGE_VERSION,
+                "probe_method": args.probe_method,
                 "model_alias": args.model_alias,
                 "tool_format": tool_format,
                 "prefill_mode": prefill_mode,

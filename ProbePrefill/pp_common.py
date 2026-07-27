@@ -38,25 +38,72 @@ from cttn.when2tool_bridge import load_model_module, load_utils
 
 PP_STAGE_VERSION = 1
 PP_METHOD = "CTD-Probe&Prefill"
+PROBE_METHOD_SAFETY_KERNEL = "safety_kernel"
+PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
+SUPPORTED_PROBE_METHODS = (PROBE_METHOD_SAFETY_KERNEL, PROBE_METHOD_PRECISE_SHIELD)
+PROBE_METHOD_CONFIGS = {
+    PROBE_METHOD_SAFETY_KERNEL: {
+        "namespace": "",
+        "label": "Safety Kernel",
+        "shared_label": "CTD",
+        "single_label": "TDN",
+        "shared_filename": "CTD_neurons.jsonl",
+        "single_filename": "TDN_neurons.jsonl",
+        "feature_set": "CTD",
+        "feature_description": "Safety Kernel CTD FFN output last-token activations",
+        "feature_definition": "stage4 last-input-token FFN output activation restricted to stage6 CTD neurons",
+        "train_probe_method": "CTD logistic probe",
+        "probe_prefill_method": PP_METHOD,
+    },
+    PROBE_METHOD_PRECISE_SHIELD: {
+        "namespace": "precise_shield",
+        "label": "PreciseShield",
+        "shared_label": "PS_CTD",
+        "single_label": "PS_TDN",
+        "shared_filename": "PS_CTD_neurons.jsonl",
+        "single_filename": "PS_TDN_neurons.jsonl",
+        "feature_set": "PS_CTD",
+        "feature_description": "PreciseShield PS-CTD FFN intermediate last-token activations",
+        "feature_definition": "PreciseShield last-input-token FFN intermediate h before down_proj restricted to stage6 PS_CTD neurons",
+        "train_probe_method": "PS_CTD logistic probe",
+        "probe_prefill_method": "PreciseShield-PS_CTD-Probe&Prefill",
+    },
+}
 
 __all__ = [
     "PP_METHOD",
     "PP_STAGE_VERSION",
+    "PROBE_METHOD_PRECISE_SHIELD",
+    "PROBE_METHOD_SAFETY_KERNEL",
+    "SUPPORTED_PROBE_METHODS",
     "classification_metrics",
     "clean_path",
     "compare_summaries_to_base",
     "compute_prefills",
+    "default_method_activations_dir",
+    "default_method_neurons_dir",
     "default_prefill_mode",
     "features_from_rows",
     "flatten_probe_predictions",
     "grouped_classification_metrics",
     "infer_tool_format",
     "load_ctd_rows",
+    "load_shared_neuron_rows",
     "load_model_module",
     "load_stage_activations",
     "load_tdn_rows",
     "load_utils",
+    "method_feature_definition",
+    "method_feature_description",
+    "method_feature_set",
+    "method_label",
+    "method_neuron_identity",
+    "method_probe_prefill_name",
+    "method_train_probe_name",
+    "normalize_probe_method",
     "parse_thresholds",
+    "probe_method_choices",
+    "probe_method_root",
     "path_from_config",
     "print_subset_plan",
     "pp_subdir",
@@ -114,6 +161,84 @@ PREFILL_TEMPLATES = {
         },
     },
 }
+
+
+def normalize_probe_method(value: str | None) -> str:
+    method = (value or PROBE_METHOD_SAFETY_KERNEL).strip().lower().replace("-", "_")
+    aliases = {
+        "ctd": PROBE_METHOD_SAFETY_KERNEL,
+        "safety": PROBE_METHOD_SAFETY_KERNEL,
+        "safetykernel": PROBE_METHOD_SAFETY_KERNEL,
+        "safety_kernel_ctd": PROBE_METHOD_SAFETY_KERNEL,
+        "ps": PROBE_METHOD_PRECISE_SHIELD,
+        "preciseshield": PROBE_METHOD_PRECISE_SHIELD,
+        "ps_ctd": PROBE_METHOD_PRECISE_SHIELD,
+    }
+    method = aliases.get(method, method)
+    if method not in PROBE_METHOD_CONFIGS:
+        raise ValueError(f"Unknown probe method: {value}. Valid: {', '.join(SUPPORTED_PROBE_METHODS)}")
+    return method
+
+
+def probe_method_choices() -> tuple[str, ...]:
+    return SUPPORTED_PROBE_METHODS
+
+
+def _method_config(probe_method: str | None) -> dict[str, str]:
+    return PROBE_METHOD_CONFIGS[normalize_probe_method(probe_method)]
+
+
+def probe_method_root(root: Path, probe_method: str | None) -> Path:
+    cfg = _method_config(probe_method)
+    namespace = cfg["namespace"]
+    if not namespace or root.name == namespace:
+        return root
+    return root / namespace
+
+
+def default_method_activations_dir(probe_method: str | None) -> Path:
+    method = normalize_probe_method(probe_method)
+    if method == PROBE_METHOD_PRECISE_SHIELD:
+        return data_root() / "precise_shield" / "activations"
+    return path_from_config("activations_dir")
+
+
+def default_method_neurons_dir(probe_method: str | None) -> Path:
+    method = normalize_probe_method(probe_method)
+    if method == PROBE_METHOD_PRECISE_SHIELD:
+        return data_root() / "precise_shield" / "neurons"
+    return path_from_config("neurons_dir")
+
+
+def method_label(probe_method: str | None) -> str:
+    return _method_config(probe_method)["label"]
+
+
+def method_feature_set(probe_method: str | None) -> str:
+    return _method_config(probe_method)["feature_set"]
+
+
+def method_feature_description(probe_method: str | None) -> str:
+    return _method_config(probe_method)["feature_description"]
+
+
+def method_feature_definition(probe_method: str | None) -> str:
+    return _method_config(probe_method)["feature_definition"]
+
+
+def method_train_probe_name(probe_method: str | None) -> str:
+    return _method_config(probe_method)["train_probe_method"]
+
+
+def method_probe_prefill_name(probe_method: str | None) -> str:
+    return _method_config(probe_method)["probe_prefill_method"]
+
+
+def method_neuron_identity(row: dict[str, Any]) -> dict[str, Any]:
+    out = {"layer": int(row["layer"]), "index": int(row["index"])}
+    if "module" in row:
+        out["module"] = str(row["module"])
+    return out
 
 
 def stable_sha256(value: Any) -> str:
@@ -253,16 +378,33 @@ def load_stage_activations(activations_dir: Path, model_alias: str, subset: str,
     return payload, meta_rows, manifest
 
 
-def load_ctd_rows(neurons_dir: Path, model_alias: str, subset: str) -> list[dict[str, Any]]:
-    path = neurons_dir / model_alias / "shared_by_subset" / subset / "CTD_neurons.jsonl"
+def load_shared_neuron_rows(
+    neurons_dir: Path,
+    model_alias: str,
+    subset: str,
+    probe_method: str | None = PROBE_METHOD_SAFETY_KERNEL,
+) -> list[dict[str, Any]]:
+    cfg = _method_config(probe_method)
+    path = neurons_dir / model_alias / "shared_by_subset" / subset / cfg["shared_filename"]
     rows = read_jsonl(path)
     if not rows:
-        raise ValueError(f"CTD neuron set is empty: {path}")
+        raise ValueError(f"{cfg['shared_label']} neuron set is empty: {path}")
     return rows
 
 
-def load_tdn_rows(neurons_dir: Path, model_alias: str, subset: str, task_type: str) -> list[dict[str, Any]]:
-    path = neurons_dir / model_alias / "single_type_by_subset" / subset / task_type / "TDN_neurons.jsonl"
+def load_ctd_rows(neurons_dir: Path, model_alias: str, subset: str) -> list[dict[str, Any]]:
+    return load_shared_neuron_rows(neurons_dir, model_alias, subset, PROBE_METHOD_SAFETY_KERNEL)
+
+
+def load_tdn_rows(
+    neurons_dir: Path,
+    model_alias: str,
+    subset: str,
+    task_type: str,
+    probe_method: str | None = PROBE_METHOD_SAFETY_KERNEL,
+) -> list[dict[str, Any]]:
+    cfg = _method_config(probe_method)
+    path = neurons_dir / model_alias / "single_type_by_subset" / subset / task_type / cfg["single_filename"]
     return read_jsonl(path)
 
 

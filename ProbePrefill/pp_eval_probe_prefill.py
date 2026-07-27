@@ -15,8 +15,8 @@ import numpy as np
 import torch
 
 from pp_common import (
-    PP_METHOD,
     PP_STAGE_VERSION,
+    PROBE_METHOD_SAFETY_KERNEL,
     compute_prefills,
     default_prefill_mode,
     flatten_probe_predictions,
@@ -25,11 +25,15 @@ from pp_common import (
     is_dp_parent,
     load_model_module,
     load_utils,
+    method_probe_prefill_name,
+    normalize_probe_method,
     path_from_config,
     make_dp_run_root,
     parse_gpus,
     parse_thresholds,
     print_subset_plan,
+    probe_method_choices,
+    probe_method_root,
     prepare_feature_meta_shard,
     prepare_feature_tensor_shard,
     pp_subdir,
@@ -63,12 +67,13 @@ from cttn.seeds import seed_arg_kwargs
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ProbePrefill stage 3: run When2Tool Probe&Prefill with CTD probe.")
+    parser = argparse.ArgumentParser(description="ProbePrefill stage 3: run When2Tool Probe&Prefill with a shared-neuron probe.")
     parser.add_argument("--model-alias", required=True)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--dataset-dir", default=None)
     parser.add_argument("--when2tool-repo", default=None)
     parser.add_argument("--output-root", default=None)
+    parser.add_argument("--probe-method", choices=probe_method_choices(), default=PROBE_METHOD_SAFETY_KERNEL)
     parser.add_argument("--subset", choices=["single_hop", "multi_hop", "all"], default="all")
     parser.add_argument("--thresholds", default="0.5")
     parser.add_argument("--temperature", type=float, default=2.0)
@@ -105,7 +110,7 @@ def output_dir(root: Path, model_alias: str, subset: str, tag: str) -> Path:
 
 def load_probe(path: Path) -> dict[str, Any]:
     if not path.exists():
-        raise FileNotFoundError(f"Missing trained CTD probe: {path}")
+        raise FileNotFoundError(f"Missing trained ProbePrefill probe: {path}")
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
@@ -162,10 +167,10 @@ def expected_params(
     probe_manifest: dict[str, Any],
     feature_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    params = {
         "stage": "pp_03_probe_prefill_evaluation",
         "stage_version": PP_STAGE_VERSION,
-        "method": PP_METHOD,
+        "method": method_probe_prefill_name(args.probe_method),
         "model_alias": args.model_alias,
         "model_path": str(model_path),
         "subset": subset,
@@ -189,6 +194,9 @@ def expected_params(
         "probe_manifest_params": probe_manifest.get("params", {}),
         "feature_summary": feature_summary,
     }
+    if args.probe_method != PROBE_METHOD_SAFETY_KERNEL:
+        params["probe_method"] = args.probe_method
+    return params
 
 
 def make_agent(args: argparse.Namespace, *, model_path: Path, w2t_model: Any) -> Any:
@@ -224,6 +232,7 @@ def write_case_outputs(
     params: dict[str, Any],
     tool_format: str,
 ) -> dict[str, Any]:
+    method_name = method_probe_prefill_name(args.probe_method)
     run_summaries: dict[str, dict[str, Any]] = {}
     for run_id in range(args.n_runs):
         rows = [row for row in all_per_task if int(row.get("run_id", 0)) == run_id]
@@ -254,7 +263,7 @@ def write_case_outputs(
             summary_payload,
             model_alias=args.model_alias,
             subset=subset,
-            method=PP_METHOD,
+            method=method_name,
             extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
         )
         if args.n_runs == 1
@@ -262,7 +271,7 @@ def write_case_outputs(
             summary_payload["mean_std"],
             model_alias=args.model_alias,
             subset=subset,
-            method=PP_METHOD,
+            method=method_name,
             extra={"threshold": threshold, "temperature": args.temperature, "prefill_mode": prefill_mode},
         )
     )
@@ -273,7 +282,7 @@ def write_case_outputs(
         summary=summary_payload,
         model_alias=args.model_alias,
         subset=subset,
-        method=PP_METHOD,
+        method=method_name,
         threshold=threshold,
         temperature=args.temperature,
         prefill_mode=prefill_mode,
@@ -332,7 +341,7 @@ def evaluate_case(
             summary=summary,
             model_alias=args.model_alias,
             subset=subset,
-            method=PP_METHOD,
+            method=method_probe_prefill_name(args.probe_method),
             threshold=threshold,
             temperature=args.temperature,
             prefill_mode=prefill_mode,
@@ -467,6 +476,7 @@ def run_data_parallel(
     root_manifest: dict[str, Any] = {
         "stage": "pp_03_probe_prefill_evaluation",
         "stage_version": PP_STAGE_VERSION,
+        "probe_method": args.probe_method,
         "model_alias": args.model_alias,
         "tool_format": tool_format,
         "prefill_mode": prefill_mode,
@@ -501,7 +511,7 @@ def run_data_parallel(
             run_root = make_dp_run_root(root, stage="pp_03", model_alias=args.model_alias, subset=subset)
             worker_roots: list[Path] = []
             for index, indices in enumerate(shard_sets):
-                worker_root = run_root / f"shard_{index:02d}"
+                worker_root = probe_method_root(run_root / f"shard_{index:02d}", args.probe_method)
                 prepare_feature_meta_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
                 prepare_feature_tensor_shard(root, worker_root, model_alias=args.model_alias, subset=subset, indices=indices, split="test")
                 copy_probe_artifacts(root, worker_root, model_alias=args.model_alias, subset=subset)
@@ -557,6 +567,7 @@ def run_data_parallel(
 
 def main() -> None:
     args = parse_args()
+    args.probe_method = normalize_probe_method(args.probe_method)
     if args.n_runs < 1:
         raise ValueError("--n-runs must be >= 1")
     # Keep task sharding, tool-call identifiers, and backend-independent
@@ -565,7 +576,7 @@ def main() -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    root = probe_prefill_root(args.output_root)
+    root = probe_method_root(probe_prefill_root(args.output_root), args.probe_method)
     dataset_root = resolve_path(args.dataset_dir) if args.dataset_dir else path_from_config("modified_dataset_dir")
     model_dataset = dataset_root / args.model_alias
     if not model_dataset.exists():
@@ -592,6 +603,7 @@ def main() -> None:
             root_manifest = {
                 "stage": "pp_03_probe_prefill_evaluation",
                 "stage_version": PP_STAGE_VERSION,
+                "probe_method": args.probe_method,
                 "model_alias": args.model_alias,
                 "tool_format": tool_format,
                 "prefill_mode": prefill_mode,
