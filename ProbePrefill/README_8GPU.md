@@ -23,12 +23,13 @@
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel_noabc/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel_deepfake/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_union/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_noabc/
 ```
 
-`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method safety_kernel_deepfake` 读取 `SafetyKernel_Deepfake` 阶段 SKD-4 激活和 SKD-6 产生的 `SKD_CTD`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。
 
 ## 运行顺序
 
@@ -39,6 +40,25 @@ PP-1 -> PP-2 -> PP-3 -> PP-4 -> PP-5
 ```
 
 PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP-4。
+
+## SafetyKernel_Deepfake 前置阶段
+
+该方法复用根目录 `README.md` 的阶段 1-3。完成改造后数据集后，按顺序运行 SKD-4/5/6；只使用 `train` split 发现神经元，`test` activation 只供 PP-1 构建后续评测特征。
+
+SKD-4 单卡指令：
+```text
+python SafetyKernel_Deepfake/skdf_extract_ffn_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0
+```
+
+SKD-5 单卡指令：
+```text
+python SafetyKernel_Deepfake/skdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --top-ratio 0.01 --min-neurons-per-module 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
+```
+
+SKD-6 单卡指令：
+```text
+python SafetyKernel_Deepfake/skdf_discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --heatmap-top-n 300
+```
 
 ## PP-1 构建全量共享神经元 Probe 特征
 
@@ -60,6 +80,12 @@ SafetyKernel_noABC / SK_noABC_TDN 单卡指令：
 
 ```text
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_noabc --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
+```
+
+SafetyKernel_Deepfake / SKD_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_deepfake --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 PreciseShield / PS-CTD 单卡指令：
@@ -100,6 +126,12 @@ SafetyKernel_noABC / SK_noABC_TDN 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_noabc --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+SafetyKernel_Deepfake / SKD_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_deepfake --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 PreciseShield / PS-CTD 单卡指令：

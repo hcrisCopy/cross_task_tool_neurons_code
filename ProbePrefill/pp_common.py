@@ -41,6 +41,7 @@ PP_METHOD = "CTD-Probe&Prefill"
 PROBE_METHOD_SAFETY_KERNEL = "safety_kernel"
 PROBE_METHOD_SAFETY_KERNEL_UNION = "safety_kernel_union"
 PROBE_METHOD_SAFETY_KERNEL_NOABC = "safety_kernel_noabc"
+PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE = "safety_kernel_deepfake"
 PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
 PROBE_METHOD_PRECISE_SHIELD_UNION = "precise_shield_union"
 PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
@@ -48,6 +49,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
     PROBE_METHOD_SAFETY_KERNEL_NOABC,
+    PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
     PROBE_METHOD_PRECISE_SHIELD,
     PROBE_METHOD_PRECISE_SHIELD_UNION,
     PROBE_METHOD_PRECISE_SHIELD_NOABC,
@@ -91,6 +93,19 @@ PROBE_METHOD_CONFIGS = {
         "feature_definition": "stage4 last-input-token FFN output activation restricted to noABC TopK SCAR(tool_necessary=1 vs 0) neurons",
         "train_probe_method": "SK_noABC_TDN logistic probe",
         "probe_prefill_method": "SafetyKernel_noABC-SK_noABC_TDN-Probe&Prefill",
+    },
+    PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE: {
+        "namespace": "safety_kernel_deepfake",
+        "label": "SafetyKernel_Deepfake",
+        "shared_label": "SKD_CTD",
+        "single_label": "SKD_TDN",
+        "shared_filename": "SKD_CTD_neurons.jsonl",
+        "single_filename": "SKD_TDN_neurons.jsonl",
+        "feature_set": "SKD_CTD",
+        "feature_description": "SafetyKernel_Deepfake shared FFN output paired-shift neurons",
+        "feature_definition": "SKD-4 last-input-token FFN output activation restricted to SKD-6 A/B/C intersection neurons scored by Deepfake paired_shift_score",
+        "train_probe_method": "SKD_CTD logistic probe",
+        "probe_prefill_method": "SafetyKernel_Deepfake-SKD_CTD-Probe&Prefill",
     },
     PROBE_METHOD_PRECISE_SHIELD: {
         "namespace": "precise_shield",
@@ -148,6 +163,7 @@ __all__ = [
     "PROBE_METHOD_PRECISE_SHIELD_NOABC",
     "PROBE_METHOD_PRECISE_SHIELD_UNION",
     "PROBE_METHOD_SAFETY_KERNEL",
+    "PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE",
     "PROBE_METHOD_SAFETY_KERNEL_NOABC",
     "PROBE_METHOD_SAFETY_KERNEL_UNION",
     "SUPPORTED_PROBE_METHODS",
@@ -255,6 +271,11 @@ def normalize_probe_method(value: str | None) -> str:
         "sk_no_abc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
         "safetykernelnoabc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
         "safety_kernel_no_abc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
+        "skd": PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
+        "sk_deepfake": PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
+        "safetykerneldeepfake": PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
+        "safety_kernel_deep_fake": PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
+        "safety_kernel_paired_shift": PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
         "ps": PROBE_METHOD_PRECISE_SHIELD,
         "preciseshield": PROBE_METHOD_PRECISE_SHIELD,
         "ps_ctd": PROBE_METHOD_PRECISE_SHIELD,
@@ -324,6 +345,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
     method = normalize_probe_method(probe_method)
     if method == PROBE_METHOD_SAFETY_KERNEL_NOABC:
         return data_root() / "safety_kernel_noabc" / "activations"
+    if method == PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE:
+        return data_root() / "safety_kernel_deepfake" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -341,6 +364,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "safety_kernel_union" / "neurons"
     if method == PROBE_METHOD_SAFETY_KERNEL_NOABC:
         return data_root() / "safety_kernel_noabc" / "neurons"
+    if method == PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE:
+        return data_root() / "safety_kernel_deepfake" / "neurons"
     return path_from_config("neurons_dir")
 
 
