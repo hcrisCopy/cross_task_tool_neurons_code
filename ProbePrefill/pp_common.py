@@ -42,11 +42,13 @@ PROBE_METHOD_SAFETY_KERNEL = "safety_kernel"
 PROBE_METHOD_SAFETY_KERNEL_UNION = "safety_kernel_union"
 PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
 PROBE_METHOD_PRECISE_SHIELD_UNION = "precise_shield_union"
+PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
     PROBE_METHOD_PRECISE_SHIELD,
     PROBE_METHOD_PRECISE_SHIELD_UNION,
+    PROBE_METHOD_PRECISE_SHIELD_NOABC,
 )
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
@@ -101,6 +103,19 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "PS_CTD_Union logistic probe",
         "probe_prefill_method": "PreciseShield_Union-PS_CTD_Union-Probe&Prefill",
     },
+    PROBE_METHOD_PRECISE_SHIELD_NOABC: {
+        "namespace": "precise_shield_noabc",
+        "label": "PreciseShield_noABC",
+        "shared_label": "PS_noABC_TDN",
+        "single_label": "PS_noABC_TDN",
+        "shared_filename": "PS_noABC_TDN_neurons.jsonl",
+        "single_filename": "PS_noABC_TDN_neurons.jsonl",
+        "feature_set": "PS_noABC_TDN",
+        "feature_description": "PreciseShield_noABC global tool-decision FFN intermediate last-token activations",
+        "feature_definition": "PreciseShield last-input-token FFN intermediate h before down_proj restricted to noABC TopK(S_tool_necessary) minus TopK(S_tool_unnecessary) neurons",
+        "train_probe_method": "PS_noABC_TDN logistic probe",
+        "probe_prefill_method": "PreciseShield_noABC-PS_noABC_TDN-Probe&Prefill",
+    },
 }
 PP_SUBDIRS = {
     "features": "probe_features",
@@ -115,6 +130,7 @@ __all__ = [
     "PP_METHOD",
     "PP_STAGE_VERSION",
     "PROBE_METHOD_PRECISE_SHIELD",
+    "PROBE_METHOD_PRECISE_SHIELD_NOABC",
     "PROBE_METHOD_PRECISE_SHIELD_UNION",
     "PROBE_METHOD_SAFETY_KERNEL",
     "PROBE_METHOD_SAFETY_KERNEL_UNION",
@@ -225,6 +241,11 @@ def normalize_probe_method(value: str | None) -> str:
         "preciseshieldunion": PROBE_METHOD_PRECISE_SHIELD_UNION,
         "precise_shield_union_ctd": PROBE_METHOD_PRECISE_SHIELD_UNION,
         "ps_ctd_union": PROBE_METHOD_PRECISE_SHIELD_UNION,
+        "psna": PROBE_METHOD_PRECISE_SHIELD_NOABC,
+        "ps_noabc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
+        "ps_no_abc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
+        "preciseshieldnoabc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
+        "precise_shield_no_abc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
     }
     method = aliases.get(method, method)
     if method not in PROBE_METHOD_CONFIGS:
@@ -280,7 +301,7 @@ def prepare_probe_method_root(root: Path, probe_method: str | None) -> Path:
 
 def default_method_activations_dir(probe_method: str | None) -> Path:
     method = normalize_probe_method(probe_method)
-    if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION}:
+    if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
 
@@ -291,6 +312,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "precise_shield" / "neurons"
     if method == PROBE_METHOD_PRECISE_SHIELD_UNION:
         return data_root() / "precise_shield_union" / "neurons"
+    if method == PROBE_METHOD_PRECISE_SHIELD_NOABC:
+        return data_root() / "precise_shield_noabc" / "neurons"
     if method == PROBE_METHOD_SAFETY_KERNEL_UNION:
         return data_root() / "safety_kernel_union" / "neurons"
     return path_from_config("neurons_dir")
