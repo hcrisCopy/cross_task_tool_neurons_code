@@ -39,8 +39,9 @@ from cttn.when2tool_bridge import load_model_module, load_utils
 PP_STAGE_VERSION = 1
 PP_METHOD = "CTD-Probe&Prefill"
 PROBE_METHOD_SAFETY_KERNEL = "safety_kernel"
+PROBE_METHOD_SAFETY_KERNEL_UNION = "safety_kernel_union"
 PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
-SUPPORTED_PROBE_METHODS = (PROBE_METHOD_SAFETY_KERNEL, PROBE_METHOD_PRECISE_SHIELD)
+SUPPORTED_PROBE_METHODS = (PROBE_METHOD_SAFETY_KERNEL, PROBE_METHOD_SAFETY_KERNEL_UNION, PROBE_METHOD_PRECISE_SHIELD)
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
         "namespace": "safety_kernel",
@@ -54,6 +55,19 @@ PROBE_METHOD_CONFIGS = {
         "feature_definition": "stage4 last-input-token FFN output activation restricted to stage6 CTD neurons",
         "train_probe_method": "CTD logistic probe",
         "probe_prefill_method": PP_METHOD,
+    },
+    PROBE_METHOD_SAFETY_KERNEL_UNION: {
+        "namespace": "safety_kernel_union",
+        "label": "SafetyKernel_Union",
+        "shared_label": "CTD_Union",
+        "single_label": "TDN",
+        "shared_filename": "CTD_Union_neurons.jsonl",
+        "single_filename": "TDN_neurons.jsonl",
+        "feature_set": "CTD_Union",
+        "feature_description": "SafetyKernel_Union FFN output last-token activations",
+        "feature_definition": "stage4 last-input-token FFN output activation restricted to SafetyKernel_Union stage6 CTD_Union neurons",
+        "train_probe_method": "CTD_Union logistic probe",
+        "probe_prefill_method": "SafetyKernel_Union-CTD_Union-Probe&Prefill",
     },
     PROBE_METHOD_PRECISE_SHIELD: {
         "namespace": "precise_shield",
@@ -83,6 +97,7 @@ __all__ = [
     "PP_STAGE_VERSION",
     "PROBE_METHOD_PRECISE_SHIELD",
     "PROBE_METHOD_SAFETY_KERNEL",
+    "PROBE_METHOD_SAFETY_KERNEL_UNION",
     "SUPPORTED_PROBE_METHODS",
     "classification_metrics",
     "clean_path",
@@ -179,6 +194,10 @@ def normalize_probe_method(value: str | None) -> str:
         "safety": PROBE_METHOD_SAFETY_KERNEL,
         "safetykernel": PROBE_METHOD_SAFETY_KERNEL,
         "safety_kernel_ctd": PROBE_METHOD_SAFETY_KERNEL,
+        "sku": PROBE_METHOD_SAFETY_KERNEL_UNION,
+        "ctd_union": PROBE_METHOD_SAFETY_KERNEL_UNION,
+        "safetykernelunion": PROBE_METHOD_SAFETY_KERNEL_UNION,
+        "safety_kernel_union_ctd": PROBE_METHOD_SAFETY_KERNEL_UNION,
         "ps": PROBE_METHOD_PRECISE_SHIELD,
         "preciseshield": PROBE_METHOD_PRECISE_SHIELD,
         "ps_ctd": PROBE_METHOD_PRECISE_SHIELD,
@@ -246,6 +265,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
     method = normalize_probe_method(probe_method)
     if method == PROBE_METHOD_PRECISE_SHIELD:
         return data_root() / "precise_shield" / "neurons"
+    if method == PROBE_METHOD_SAFETY_KERNEL_UNION:
+        return data_root() / "safety_kernel_union" / "neurons"
     return path_from_config("neurons_dir")
 
 

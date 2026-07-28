@@ -6,11 +6,12 @@
 
 从“神经元探测”开始不再固定为某一种方法。ProbePrefill 把训练前阶段抽象成一个可插拔的 `probe_method`：每种探测方法负责产出 train/test activation 和共享神经元列表，ProbePrefill 只负责读取这些神经元坐标，按 When2Tool 的训练方法训练二分类 probe，并在后续评测中照搬 When2Tool 的 Probe&Prefill。
 
-当前已适配两种上游神经元来源：
+当前已适配三种上游神经元来源：
 
 | `probe_method` | 上游方法 | 共享神经元 | activation 定义 | ProbePrefill 输出 |
 |---|---|---|---|---|
 | `safety_kernel` | Safety Kernel / SCAR | `CTD` | FFN 线性模块输出 last-token activation | `probe_prefill/safety_kernel/` |
+| `safety_kernel_union` | SafetyKernel_Union / SCAR | `CTD_Union` | FFN 线性模块输出 last-token activation | `probe_prefill/safety_kernel_union/` |
 | `precise_shield` | PreciseShield | `PS_CTD` | FFN intermediate `h` last-token activation | `probe_prefill/precise_shield/` |
 
 核心问题从固定的“CTD 能不能解码工具决策”升级为：
@@ -30,6 +31,7 @@
 方法相关上游：
 
 - Safety Kernel：读取旧阶段 4 activation、阶段 5 A/B/C `TDN`、阶段 6 `CTD`。
+- SafetyKernel_Union：读取旧阶段 4 activation、阶段 5 A/B/C `TDN`、`SafetyKernel_Union` 阶段 6 `CTD_Union`。
 - PreciseShield：读取 `PreciseShield/` 的 PS-4 activation、PS-5 A/B/C `PS_TDN`、PS-6 `PS_CTD`。
 
 公共数据输入：
@@ -47,6 +49,14 @@ Safety Kernel 输入：
 ../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/CTD_neurons.jsonl
 ```
 
+SafetyKernel_Union 输入：
+
+```text
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/activations.pt
+../cross_task_tool_neurons_data/activations/<model_alias>/<subset>/<split>/meta.jsonl
+../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/CTD_Union_neurons.jsonl
+```
+
 PreciseShield 输入：
 
 ```text
@@ -60,6 +70,7 @@ ProbePrefill 输出：
 
 ```text
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/    # safety_kernel 输出
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/    # safety_kernel_union 输出
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/   # precise_shield 输出
 ```
 
@@ -121,7 +132,17 @@ SCAR_n = D_n + R_n
 CTD = TDN_A intersection TDN_B intersection TDN_C
 ```
 
-### 3.2 PreciseShield / PS-CTD
+### 3.2 SafetyKernel_Union / CTD_Union
+
+SafetyKernel_Union 不改阶段 4 activation 和阶段 5 SCAR/TDN，只把阶段 6 的集合算子从交集改成并集：
+
+```text
+CTD_Union = TDN_A union TDN_B union TDN_C
+```
+
+ProbePrefill 读取 `CTD_Union_neurons.jsonl`，仍然按完整身份 `(layer, module, index)` 到旧阶段 4 FFN output activation 中取值。这个方案用于比较“交集核心”与“并集子空间”哪一个更适合 When2Tool 式二分类 probe。
+
+### 3.3 PreciseShield / PS-CTD
 
 PreciseShield 使用 FFN intermediate：
 
@@ -181,6 +202,12 @@ Safety Kernel 输出：
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/probe_features/<model_alias>/<subset>/
 ```
 
+SafetyKernel_Union 输出：
+
+```text
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/probe_features/<model_alias>/<subset>/
+```
+
 PreciseShield 输出：
 
 ```text
@@ -216,6 +243,7 @@ u_m,s,r(x) in R^d
 |---|---|---|
 | When2Tool 原始 hidden-state probe | 对每条样本做一次模型前向，取开始生成前最后一个输入 token；收集所有 Transformer 层的 hidden state `H_l(x)[t_end]`，按层顺序拼接成 `[H_1; H_2; ...; H_L]`，作为全层 hidden states 特征。 | `StandardScaler + L2 LogisticRegression` 训练二分类 probe，标签是该模型自己的 `tool_necessary`。 |
 | Safety Kernel / CTD probe | 先由 Safety Kernel/SCAR 在 A/B/C 中挖掘 `TDN`，再取交集得到 `CTD`。ProbePrefill 读取 `CTD_neurons.jsonl`，从 stage4 保存的 FFN 线性模块输出 activation 中，取最后输入 token 上这些 `(layer, module, index)` 坐标的值，按 CTD 顺序拼成 `phi_safety_kernel(x)`。 | 分类器完全照搬 When2Tool；只是输入从全层 hidden states 换成 CTD 神经元 activation。 |
+| SafetyKernel_Union / CTD_Union probe | 先由 Safety Kernel/SCAR 在 A/B/C 中挖掘 `TDN`，再取并集得到 `CTD_Union`。ProbePrefill 读取 `CTD_Union_neurons.jsonl`，从同一份 stage4 FFN output activation 中取 `(layer, module, index)` 坐标，拼成 `phi_safety_kernel_union(x)`。 | 分类器完全照搬 When2Tool；只是输入换成 CTD_Union 神经元 activation。 |
 | PreciseShield / PS-CTD probe | 先由 PreciseShield 根据 FFN intermediate `h` 的重要性得分挖掘 A/B/C 的 `PS_TDN`，再取交集得到 `PS_CTD`。ProbePrefill 读取 `PS_CTD_neurons.jsonl`，从 PS-4 保存的 `down_proj` 输入处 intermediate `h` 中，取最后输入 token 上这些 `(layer, index)` 坐标的值，按 PS-CTD 顺序拼成 `phi_precise_shield(x)`。 | 分类器完全照搬 When2Tool；只是输入换成 PS-CTD intermediate 神经元 activation。 |
 | 后续新增探测方法 | 新方法只需要产出 train/test activation 和共享神经元列表，并在 `ProbePrefill` 中定义如何由神经元坐标抽出 `phi_r(x)`。 | 继续复用同一套 `StandardScaler + L2 LogisticRegression`、同一套 test 评测和 Probe&Prefill。 |
 
@@ -388,6 +416,7 @@ PreciseShield 的 generation-time mask 作用在 `down_proj` 输入 `h`，机制
 1. 先按总 README 跑完阶段 1-3。
 2. 选择神经元探测方法并跑完其 activation 和共享神经元阶段：
    - Safety Kernel：旧阶段 4-6。
+   - SafetyKernel_Union：旧阶段 4-5 + `SafetyKernel_Union` 阶段 6。
    - PreciseShield：PS-4 到 PS-6。
 
 ProbePrefill 阶段：
@@ -408,7 +437,7 @@ ProbePrefill 阶段：
 ProbePrefill/README_8GPU.md
 ```
 
-当前 PP-1 和 PP-2 已分别给出 Safety Kernel 与 PreciseShield 的单卡正式命令。PP-3/PP-4 的评测入口已经支持 `--probe-method`，但 README 暂时保留八卡主评测命令，后续正式跑 PreciseShield Probe&Prefill 评测时再补对应评测阶段命令。
+当前 PP-1 和 PP-2 已分别给出 Safety Kernel、SafetyKernel_Union 与 PreciseShield 的单卡正式命令。PP-3/PP-4 的评测入口已经支持 `--probe-method`，但 README 暂时保留八卡主评测命令，后续正式跑更多 Probe&Prefill 评测时再补对应评测阶段命令。
 
 ## 12. 参考实现依据
 

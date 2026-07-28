@@ -21,10 +21,11 @@
 
 ```text
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
 ```
 
-`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。
 
 ## 运行顺序
 
@@ -36,14 +37,41 @@ PP-1 -> PP-2 -> PP-3 -> PP-4 -> PP-5
 
 PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP-4。
 
+## 上游 SafetyKernel_Union 阶段 6
+
+先按总 README 跑完阶段 1-5，再运行本并集阶段。它只读取阶段 5 的 A/B/C `TDN_neurons.jsonl`，不重新抽 activation，不重新 split。
+
+SafetyKernel_Union / CTD_Union 单卡指令：
+
+```text
+python SafetyKernel_Union/sku_discover_union_neurons.py --model-alias qwen3-4b-instruct --input-neurons-dir ../cross_task_tool_neurons_data/neurons --output-neurons-dir ../cross_task_tool_neurons_data/safety_kernel_union/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_union/visualizations --subset all --heatmap-top-n 300
+```
+
+输出：
+
+```text
+../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/CTD_Union_neurons.jsonl
+../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
+../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
+../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/*.png
+```
+
+终端打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。产物存在且 manifest 一致会提前跳过；错误旧产物在原命令末尾加 `--clean`。
+
 ## PP-1 构建全量共享神经元 Probe 特征
 
-PP-1 只读取已经完成的 activation、共享神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。PP-1 本身没有多卡/单卡差异；下面两条都是单卡正式实验可直接运行的命令。
+PP-1 只读取已经完成的 activation、共享神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。PP-1 本身没有多卡/单卡差异；下面命令都是单卡正式实验可直接运行的命令。
 
 Safety Kernel / CTD 单卡指令：
 
 ```text
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
+```
+
+SafetyKernel_Union / CTD_Union 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_union --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 PreciseShield / PS-CTD 单卡指令：
@@ -60,6 +88,12 @@ Safety Kernel / CTD 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+SafetyKernel_Union / CTD_Union 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_union --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 PreciseShield / PS-CTD 单卡指令：
