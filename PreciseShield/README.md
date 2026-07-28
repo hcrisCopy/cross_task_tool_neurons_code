@@ -182,10 +182,10 @@ python PreciseShield/ps_discover_shared_neurons.py --model-alias qwen3-4b-instru
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/shared_by_subset/<subset>/pairwise_AB_neurons.jsonl
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/shared_by_subset/<subset>/private_A_neurons.jsonl
 ../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/shared_by_subset/*.png
-../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/shared_by_subset/ps_ctd_layer_top1pct_saliency_heatmap_<subset>_<A|B|C>.png
+../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/shared_by_subset/ps_ctd_layer_top1pct_saliency_heatmap_<subset>.png
 ```
 
-做法：按完整身份 `(layer, index)` 取交集，`PS_CTD = A ∩ B ∩ C`。pairwise 和 private 只用于分析和因果对照。新增的 `ps_ctd_layer_top1pct_saliency_heatmap` 按 PreciseShield 的 `layer + ffn_intermediate` 神经元定义分行，对同一批 PS-CTD 共享神经元分别展示其在 A/B/C 单类型发现中的原始 `score_A` / `score_B` / `score_C`（即 `S_call`）分数；旧 PS-CTD 产物存在时重跑本阶段会直接补图，并清理旧的逐层 top1% 聚合图。
+做法：按完整身份 `(layer, index)` 取交集，`PS_CTD = A ∩ B ∩ C`。pairwise 和 private 只用于分析和因果对照。新增的 `ps_ctd_layer_top1pct_saliency_heatmap` 是 PS-CTD 共享集合的一张逐层图，按 PreciseShield 的 `layer + ffn_intermediate` 神经元定义分行，使用 `shared_score = min(score_A, score_B, score_C)` 表示交集神经元的保守共享 `S_call` 强度；旧 PS-CTD 产物存在时重跑本阶段会直接补图，并清理旧的逐层 top1% A/B/C 拆分图或聚合图。
 
 ## PS-7：PreciseShield-Masked-LoRA 训练
 

@@ -243,13 +243,15 @@ def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"shared_neuron_heatmap_{subset}.png",
         viz_dir / f"ctd_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_scar_mean_heatmap_{subset}.png",
-    ] + [viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+        viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}.png",
+    ]
 
 
 def legacy_layer_top_visualizations(viz_dir: Path, subset: str) -> list[Path]:
     return [
         viz_dir / f"ctd_layer_top1pct_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_layer_top1pct_scar_mean_heatmap_{subset}.png",
+        *[viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES],
         viz_dir / f"ctd_layer_top3pct_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_layer_top3pct_scar_mean_heatmap_{subset}.png",
         viz_dir / f"ctd_layer_top10_scar_min_heatmap_{subset}.png",
@@ -311,30 +313,27 @@ def backfill_layer_top1pct_visualizations(
     if manifest.get("params") != params:
         return False
     clean_legacy_layer_top_visualizations(viz_dir, subset)
-    targets = {
-        task_type: viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
-        for task_type in TASK_TYPES
-    }
-    if all(path.exists() for path in targets.values()):
+    target = viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}.png"
+    if target.exists():
         return False
 
     ctd_rows = read_jsonl(ctd_path)
     module_dims = load_module_dims(single_root, subset)
-    for task_type, out_path in targets.items():
-        plot_layer_top_shared_score_heatmap(
-            ctd_rows,
-            module_dims,
-            out_path,
-            score_field=f"score_{task_type}",
-            score_label=f"Type {task_type} SCAR",
-            title=f"{subset} CTD: top 1% shared SCAR by layer/module (type {task_type})",
-        )
+    plot_layer_top_shared_score_heatmap(
+        ctd_rows,
+        module_dims,
+        target,
+        score_field="score_min",
+        score_label="Shared SCAR = min(score_A, score_B, score_C)",
+        title=f"{subset} CTD: top 1% shared SCAR by layer/module",
+    )
 
     summary = read_json(out_dir / "summary.json") if (out_dir / "summary.json").exists() else manifest.get("summary", {})
     scar_visualizations = summary.setdefault("scar_visualizations", {})
     scar_visualizations.pop("layer_top1pct_score_min", None)
     scar_visualizations.pop("layer_top1pct_score_mean", None)
-    scar_visualizations["layer_top1pct_by_type"] = {task_type: str(path) for task_type, path in targets.items()}
+    scar_visualizations.pop("layer_top1pct_by_type", None)
+    scar_visualizations["layer_top1pct_shared_score"] = str(target)
     manifest["summary"] = summary
     write_json(out_dir / "summary.json", summary)
     write_json(manifest_path, manifest)
@@ -412,18 +411,15 @@ def main() -> None:
         scar_mean_heatmap_path = viz_dir / f"ctd_scar_mean_heatmap_{subset}.png"
         plot_ctd_scar_heatmap(ctd_rows, scar_min_heatmap_path, "score_min", args.heatmap_top_n)
         plot_ctd_scar_heatmap(ctd_rows, scar_mean_heatmap_path, "score_mean", args.heatmap_top_n)
-        layer_top1pct_paths = {}
-        for task_type in TASK_TYPES:
-            layer_top1pct_path = viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
-            plot_layer_top_shared_score_heatmap(
-                ctd_rows,
-                module_dims,
-                layer_top1pct_path,
-                score_field=f"score_{task_type}",
-                score_label=f"Type {task_type} SCAR",
-                title=f"{subset} CTD: top 1% shared SCAR by layer/module (type {task_type})",
-            )
-            layer_top1pct_paths[task_type] = str(layer_top1pct_path)
+        layer_top1pct_path = viz_dir / f"ctd_layer_top1pct_scar_heatmap_{subset}.png"
+        plot_layer_top_shared_score_heatmap(
+            ctd_rows,
+            module_dims,
+            layer_top1pct_path,
+            score_field="score_min",
+            score_label="Shared SCAR = min(score_A, score_B, score_C)",
+            title=f"{subset} CTD: top 1% shared SCAR by layer/module",
+        )
 
         summary = {
             "tdn_counts": {task_type: len(sets[task_type]) for task_type in TASK_TYPES},
@@ -436,7 +432,7 @@ def main() -> None:
             "scar_visualizations": {
                 "score_min": str(scar_min_heatmap_path),
                 "score_mean": str(scar_mean_heatmap_path),
-                "layer_top1pct_by_type": layer_top1pct_paths,
+                "layer_top1pct_shared_score": str(layer_top1pct_path),
             },
         }
         write_json(out_dir / "summary.json", summary)

@@ -43,11 +43,11 @@ python SafetyKernel_Union/sku_discover_union_neurons.py --model-alias qwen3-4b-i
 ../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
 ../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
 ../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/*.png
-../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/ctd_union_layer_top1pct_scar_heatmap_<subset>_<A|B|C>.png
+../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/ctd_union_layer_top1pct_scar_heatmap_<subset>.png
 ../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/single_type_by_subset/sku_layer_top1pct_scar_heatmap_<subset>_<A|B|C>.png
 ```
 
-终端会打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。新增的 `sku_layer_top1pct_scar_heatmap` 复用阶段 5 的 Safety Kernel SCAR 分数，按 `layer + gate_proj/up_proj/down_proj` 展示 A/B/C 单类型每层每个 FFN module 前 1% 神经元分数；`ctd_union_layer_top1pct_scar_heatmap` 对同一批 CTD-Union 神经元分别展示其在 A/B/C 单类型发现中的原始 `score_A` / `score_B` / `score_C` SCAR 分数，某个 union 神经元不属于该类型时该类型图留空。产物存在且 manifest 参数一致时会提前跳过；如果旧 `CTD_Union` 产物存在但缺少新图，重跑本命令会直接补图，并清理旧的逐层 top1% 聚合图。
+终端会打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。新增的 `sku_layer_top1pct_scar_heatmap` 复用阶段 5 的 Safety Kernel SCAR 分数，按 `layer + gate_proj/up_proj/down_proj` 展示 A/B/C 单类型每层每个 FFN module 前 1% 神经元分数；`ctd_union_layer_top1pct_scar_heatmap` 是 CTD-Union 集合的一张逐层图，使用 `union_score = max(available score_A, score_B, score_C)` 表示并集神经元的最强来源类型分数。产物存在且 manifest 参数一致时会提前跳过；如果旧 `CTD_Union` 产物存在但缺少新图，重跑本命令会直接补图，并清理旧的逐层 top1% A/B/C 拆分图或聚合图。
 
 ## 重跑与清理
 

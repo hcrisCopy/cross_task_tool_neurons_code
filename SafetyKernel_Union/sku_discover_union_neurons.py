@@ -393,9 +393,7 @@ def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"ctd_union_density_heatmap_{subset}.png",
         viz_dir / f"ctd_union_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_union_scar_mean_heatmap_{subset}.png",
-    ] + [
-        viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
-        for task_type in TASK_TYPES
+        viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}.png",
     ]
 
 
@@ -407,6 +405,7 @@ def legacy_visualizations(viz_dir: Path, single_viz_dir: Path, subset: str) -> l
     shared_names = [
         f"ctd_union_layer_top1pct_scar_min_heatmap_{subset}.png",
         f"ctd_union_layer_top1pct_scar_mean_heatmap_{subset}.png",
+        *[f"ctd_union_layer_top1pct_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES],
         f"ctd_union_layer_top3pct_scar_min_heatmap_{subset}.png",
         f"ctd_union_layer_top3pct_scar_mean_heatmap_{subset}.png",
         f"ctd_union_layer_top10_scar_min_heatmap_{subset}.png",
@@ -541,30 +540,28 @@ def backfill_visualizations(
     plot_density(union_rows, module_dims, density_path)
     plot_scar_heatmap(union_rows, score_min_path, "score_min", heatmap_top_n)
     plot_scar_heatmap(union_rows, score_mean_path, "score_mean", heatmap_top_n)
-    union_top_paths = {}
-    for task_type in TASK_TYPES:
-        layer_top1pct_path = viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
-        plot_layer_top_union_score_heatmap(
-            union_rows,
-            module_dims,
-            layer_top1pct_path,
-            score_field=f"score_{task_type}",
-            score_label=f"Type {task_type} SCAR",
-            title=f"{subset} CTD-Union: top 1% SCAR by layer/module (type {task_type})",
-        )
-        union_top_paths[task_type] = str(layer_top1pct_path)
+    layer_top1pct_path = viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}.png"
+    plot_layer_top_union_score_heatmap(
+        union_rows,
+        module_dims,
+        layer_top1pct_path,
+        score_field="score_max",
+        score_label="Union SCAR = max(available score_A, score_B, score_C)",
+        title=f"{subset} CTD-Union: top 1% union SCAR by layer/module",
+    )
     single_top_paths = plot_single_type_layer_top1pct_visualizations(single_root, single_viz_dir, subset)
 
     summary = read_json(out_dir / "summary.json") if (out_dir / "summary.json").exists() else manifest.get("summary", {})
     visualizations = summary.setdefault("visualizations", {})
     visualizations.pop("layer_top1pct_score_min_heatmap", None)
     visualizations.pop("layer_top1pct_score_mean_heatmap", None)
+    visualizations.pop("layer_top1pct_by_type_heatmaps", None)
     visualizations.update(
         {
             "density_heatmap": str(density_path),
             "score_min_heatmap": str(score_min_path),
             "score_mean_heatmap": str(score_mean_path),
-            "layer_top1pct_by_type_heatmaps": union_top_paths,
+            "layer_top1pct_union_score_heatmap": str(layer_top1pct_path),
             "single_type_layer_top1pct_scar_heatmaps": single_top_paths,
         }
     )
@@ -705,18 +702,15 @@ def main() -> None:
         plot_density(union_rows, module_dims, density_path)
         plot_scar_heatmap(union_rows, score_min_path, "score_min", args.heatmap_top_n)
         plot_scar_heatmap(union_rows, score_mean_path, "score_mean", args.heatmap_top_n)
-        union_top_paths = {}
-        for task_type in TASK_TYPES:
-            layer_top1pct_path = viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
-            plot_layer_top_union_score_heatmap(
-                union_rows,
-                module_dims,
-                layer_top1pct_path,
-                score_field=f"score_{task_type}",
-                score_label=f"Type {task_type} SCAR",
-                title=f"{subset} CTD-Union: top 1% SCAR by layer/module (type {task_type})",
-            )
-            union_top_paths[task_type] = str(layer_top1pct_path)
+        layer_top1pct_path = viz_dir / f"ctd_union_layer_top1pct_scar_heatmap_{subset}.png"
+        plot_layer_top_union_score_heatmap(
+            union_rows,
+            module_dims,
+            layer_top1pct_path,
+            score_field="score_max",
+            score_label="Union SCAR = max(available score_A, score_B, score_C)",
+            title=f"{subset} CTD-Union: top 1% union SCAR by layer/module",
+        )
         single_top_paths = plot_single_type_layer_top1pct_visualizations(single_root, single_viz_dir, subset)
 
         summary = {
@@ -733,7 +727,7 @@ def main() -> None:
                 "density_heatmap": str(density_path),
                 "score_min_heatmap": str(score_min_path),
                 "score_mean_heatmap": str(score_mean_path),
-                "layer_top1pct_by_type_heatmaps": union_top_paths,
+                "layer_top1pct_union_score_heatmap": str(layer_top1pct_path),
                 "single_type_layer_top1pct_scar_heatmaps": single_top_paths,
             },
         }
