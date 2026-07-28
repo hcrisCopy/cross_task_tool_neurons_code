@@ -25,7 +25,7 @@ from cttn.paths import clean_directory, data_root, ensure_dir, resolve_path
 from cttn.progress import progress
 
 
-STAGE_VERSION = 1
+STAGE_VERSION = 2
 METHOD_NAME = "SafetyKernel_Deepfake"
 TDN_FILENAME = "SKD_TDN_neurons.jsonl"
 MODULE_ORDER = ["gate_proj", "up_proj", "down_proj"]
@@ -58,8 +58,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--top-ratio",
         type=float,
-        default=0.01,
-        help="Deepfake-style per-module selected ratio. k_m=ceil(top_ratio * dim_m).",
+        default=0.10,
+        help="Deepfake-style per-module selected ratio. k_m=ceil(top_ratio * dim_m). Default matches deepfake-code.",
     )
     parser.add_argument("--min-neurons-per-module", type=int, default=1)
     parser.add_argument("--heatmap-top-n", type=int, default=300)

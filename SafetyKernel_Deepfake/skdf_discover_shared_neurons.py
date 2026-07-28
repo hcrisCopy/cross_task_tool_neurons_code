@@ -23,7 +23,7 @@ from cttn.paths import clean_directory, data_root, ensure_dir, resolve_path
 from cttn.progress import progress
 
 
-STAGE_VERSION = 1
+STAGE_VERSION = 2
 METHOD_NAME = "SafetyKernel_Deepfake"
 TDN_FILENAME = "SKD_TDN_neurons.jsonl"
 CTD_FILENAME = "SKD_CTD_neurons.jsonl"
@@ -468,6 +468,7 @@ def run_subset(
         "share_rates": share_rows,
         "top_layers": Counter(int(row["layer"]) for row in ctd_rows).most_common(10),
         "top_modules": Counter(str(row["module"]) for row in ctd_rows).most_common(),
+        "empty_shared_neurons": len(ctd_rows) == 0,
         "visualizations": {
             "density_heatmap": str(density_path),
             "score_min_heatmap": str(score_min_path),
@@ -475,9 +476,20 @@ def run_subset(
             "layer_top1pct_shared_score_heatmap": str(layer_top_path),
         },
     }
+    if not ctd_rows:
+        summary["warning"] = (
+            "SKD_CTD is empty under the strict A/B/C intersection. Keep the method definition unchanged; "
+            "rerun SKD-5 with a larger --top-ratio, then rerun SKD-6 before ProbePrefill."
+        )
     write_json(out_dir / "summary.json", summary)
     write_json(out_dir / "manifest.json", {"params": params, "summary": summary})
     print(f"{subset}: SKD_CTD={len(ctd)}, pairwise={summary['pairwise_counts']}", flush=True)
+    if not ctd_rows:
+        print(
+            f"WARNING {subset}: empty SKD_CTD. Rerun SKD-5 with a larger --top-ratio "
+            "(deepfake-code default is 0.10), then rerun SKD-6 before PP-1.",
+            flush=True,
+        )
     return summary
 
 

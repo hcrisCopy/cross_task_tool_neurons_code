@@ -19,7 +19,7 @@ n_i = h_m(x)_i,  m in {gate_proj, up_proj, down_proj}
 delta_i(pair) = h_m(tool_necessary=1)_i - h_m(tool_necessary=0)_i
 ```
 
-每个 subset 内只读取 `train` activation，A/B/C 三类任务分别构造确定性一对一 label pair：先在同一 task type 内按 `env_name, difficulty, id` 排序，再取 `min(n_label1, n_label0)` 对。随后每个 FFN module 按 Deepfake 的 per-layer/per-module `top_ratio` 规则选神经元，得到 `SKD_TDN_A/B/C`，最后按完整坐标取交集：
+每个 subset 内只读取 `train` activation，A/B/C 三类任务分别构造确定性一对一 label pair：先在同一 task type 内按 `env_name, difficulty, id` 排序，再取 `min(n_label1, n_label0)` 对。随后每个 FFN module 按 Deepfake 的 per-layer/per-module `top_ratio` 规则选神经元，得到 `SKD_TDN_A/B/C`，最后按完整坐标取交集。`top_ratio` 默认使用 deepfake-code 的 `0.10`：
 
 ```text
 SKD_CTD = SKD_TDN_A intersection SKD_TDN_B intersection SKD_TDN_C
@@ -51,7 +51,7 @@ python SafetyKernel_Deepfake/skdf_extract_ffn_activations.py --model-alias qwen3
 单卡正式命令：
 
 ```text
-python SafetyKernel_Deepfake/skdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --top-ratio 0.01 --min-neurons-per-module 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
+python SafetyKernel_Deepfake/skdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --top-ratio 0.10 --min-neurons-per-module 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
 ```
 
 输出：
@@ -99,6 +99,8 @@ shared_score = score_min = min(score_A, score_B, score_C)
 ```
 
 终端会打印每个 subset 的 `SKD_CTD` 数量和两两重叠数量。产物存在且 manifest 参数一致会提前跳过。
+
+如果某个 subset 出现 `SKD_CTD=0`，说明严格三交集在当前 `top_ratio` 下为空，不会自动改成并集或两两交集。保持方法定义不变，调大 SKD-5 的 `--top-ratio` 后重跑 SKD-5/SKD-6；如果是清理旧的错误比例产物，可在对应命令末尾追加 `--clean`。
 
 ## 交给 ProbePrefill
 

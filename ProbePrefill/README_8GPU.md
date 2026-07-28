@@ -52,13 +52,15 @@ python SafetyKernel_Deepfake/skdf_extract_ffn_activations.py --model-alias qwen3
 
 SKD-5 单卡指令：
 ```text
-python SafetyKernel_Deepfake/skdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --top-ratio 0.01 --min-neurons-per-module 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
+python SafetyKernel_Deepfake/skdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --top-ratio 0.10 --min-neurons-per-module 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
 ```
 
 SKD-6 单卡指令：
 ```text
 python SafetyKernel_Deepfake/skdf_discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_deepfake/visualizations --subset all --heatmap-top-n 300
 ```
+
+如果 SKD-6 打印某个 subset 的 `SKD_CTD=0`，这是严格 `A/B/C` 交集在当前选择比例下为空；保持方法定义不变，调大 SKD-5 的 `--top-ratio` 后重跑 SKD-5/SKD-6。deepfake-code 默认比例是 `0.10`。
 
 ## PP-1 构建全量共享神经元 Probe 特征
 

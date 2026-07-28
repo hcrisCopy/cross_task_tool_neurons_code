@@ -540,6 +540,14 @@ def load_shared_neuron_rows(
     path = neurons_dir / model_alias / "shared_by_subset" / subset / cfg["shared_filename"]
     rows = read_jsonl(path)
     if not rows:
+        if cfg["namespace"] == PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE:
+            raise ValueError(
+                f"{cfg['shared_label']} neuron set is empty for {model_alias}/{subset}: {path}. "
+                "SafetyKernel_Deepfake uses the strict A/B/C intersection, so this can happen when "
+                "--top-ratio is too small. Rerun SKD-5 with a larger --top-ratio "
+                "(deepfake-code default is 0.10), then rerun SKD-6 before PP-1; "
+                "or run PP-1 with --subset single_hop if you intentionally want to skip multi_hop."
+            )
         raise ValueError(f"{cfg['shared_label']} neuron set is empty: {path}")
     return rows
 
