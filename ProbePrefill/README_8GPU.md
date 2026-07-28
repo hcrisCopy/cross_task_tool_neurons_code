@@ -27,9 +27,10 @@
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_union/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_noabc/
+../cross_task_tool_neurons_data/probe_prefill/precise_shield_deepfake/
 ```
 
-`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method safety_kernel_deepfake` 读取 `SafetyKernel_Deepfake` 阶段 SKD-4 激活和 SKD-6 产生的 `SKD_CTD`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method safety_kernel_deepfake` 读取 `SafetyKernel_Deepfake` 阶段 SKD-4 激活和 SKD-6 产生的 `SKD_CTD`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。`--probe-method precise_shield_deepfake` 读取 `PreciseShield_Deepfake` 阶段 PSDF-4 激活和 PSDF-6 产生的 `PSDF_CTD`。
 
 ## 运行顺序
 
@@ -61,6 +62,27 @@ python SafetyKernel_Deepfake/skdf_discover_shared_neurons.py --model-alias qwen3
 ```
 
 如果 SKD-6 打印某个 subset 的 `SKD_CTD=0`，这是严格 `A/B/C` 交集在当前选择比例下为空；保持方法定义不变，调大 SKD-5 的 `--top-ratio` 后重跑 SKD-5/SKD-6。deepfake-code 默认比例是 `0.10`。
+
+## PreciseShield_Deepfake 前置阶段
+
+该方法复用根目录 `README.md` 的阶段 1-3。完成改造后数据集后，按顺序运行 PSDF-4/5/6；只使用 `train` split 发现神经元，`test` activation 只供 PP-1 构建后续评测特征。神经元空间是 PreciseShield 的 `ffn_intermediate`，分数是 deepfake-code paired shift。
+
+PSDF-4 单卡指令：
+```text
+python PreciseShield_Deepfake/psdf_extract_intermediate_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0 --parallel-mode auto --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --max-samples 0 --sample-strategy first --seed 2026
+```
+
+PSDF-5 单卡指令：
+```text
+python PreciseShield_Deepfake/psdf_discover_single_type_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/activations --neurons-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/visualizations --subset all --top-ratio 0.10 --min-neurons-per-layer 1 --heatmap-top-n 300 --epsilon 1.0e-4 --floor-ratio 0.05 --min-pairs 2 --max-pairs 0 --device cuda:0
+```
+
+PSDF-6 单卡指令：
+```text
+python PreciseShield_Deepfake/psdf_discover_shared_neurons.py --model-alias qwen3-4b-instruct --neurons-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/neurons --visualizations-dir ../cross_task_tool_neurons_data/precise_shield_deepfake/visualizations --subset all --heatmap-top-n 300
+```
+
+如果 PSDF-6 打印某个 subset 的 `PSDF_CTD=0`，这是严格 `A/B/C` 交集在当前选择比例下为空；保持方法定义不变，调大 PSDF-5 的 `--top-ratio` 后重跑 PSDF-5/PSDF-6。deepfake-code 默认比例是 `0.10`。
 
 ## PP-1 构建全量共享神经元 Probe 特征
 
@@ -108,6 +130,12 @@ PreciseShield_noABC / PS_noABC_TDN 单卡指令：
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method precise_shield_noabc --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
 ```
 
+PreciseShield_Deepfake / PSDF_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method precise_shield_deepfake --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
+```
+
 ## PP-2 训练共享神经元 Logistic Probe
 
 PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。单跳、多跳会分别训练各自的 probe。
@@ -152,6 +180,12 @@ PreciseShield_noABC / PS_noABC_TDN 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method precise_shield_noabc --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+PreciseShield_Deepfake / PSDF_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method precise_shield_deepfake --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 终端打印按论文表格版式：`ours` / `when2tool` 两行对比。single-hop 会额外打印 easy/medium/hard AUROC。

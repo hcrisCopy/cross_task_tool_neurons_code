@@ -45,6 +45,7 @@ PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE = "safety_kernel_deepfake"
 PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
 PROBE_METHOD_PRECISE_SHIELD_UNION = "precise_shield_union"
 PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
+PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE = "precise_shield_deepfake"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
@@ -53,6 +54,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_PRECISE_SHIELD,
     PROBE_METHOD_PRECISE_SHIELD_UNION,
     PROBE_METHOD_PRECISE_SHIELD_NOABC,
+    PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
 )
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
@@ -146,6 +148,19 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "PS_noABC_TDN logistic probe",
         "probe_prefill_method": "PreciseShield_noABC-PS_noABC_TDN-Probe&Prefill",
     },
+    PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE: {
+        "namespace": "precise_shield_deepfake",
+        "label": "PreciseShield_Deepfake",
+        "shared_label": "PSDF_CTD",
+        "single_label": "PSDF_TDN",
+        "shared_filename": "PSDF_CTD_neurons.jsonl",
+        "single_filename": "PSDF_TDN_neurons.jsonl",
+        "feature_set": "PSDF_CTD",
+        "feature_description": "PreciseShield_Deepfake shared FFN intermediate paired-shift neurons",
+        "feature_definition": "PSDF-4 last-input-token FFN intermediate h before down_proj restricted to PSDF-6 A/B/C intersection neurons scored by Deepfake paired_shift_score",
+        "train_probe_method": "PSDF_CTD logistic probe",
+        "probe_prefill_method": "PreciseShield_Deepfake-PSDF_CTD-Probe&Prefill",
+    },
 }
 PP_SUBDIRS = {
     "features": "probe_features",
@@ -160,6 +175,7 @@ __all__ = [
     "PP_METHOD",
     "PP_STAGE_VERSION",
     "PROBE_METHOD_PRECISE_SHIELD",
+    "PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE",
     "PROBE_METHOD_PRECISE_SHIELD_NOABC",
     "PROBE_METHOD_PRECISE_SHIELD_UNION",
     "PROBE_METHOD_SAFETY_KERNEL",
@@ -288,6 +304,11 @@ def normalize_probe_method(value: str | None) -> str:
         "ps_no_abc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
         "preciseshieldnoabc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
         "precise_shield_no_abc": PROBE_METHOD_PRECISE_SHIELD_NOABC,
+        "psdf": PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
+        "ps_deepfake": PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
+        "preciseshielddeepfake": PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
+        "precise_shield_deep_fake": PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
+        "precise_shield_paired_shift": PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
     }
     method = aliases.get(method, method)
     if method not in PROBE_METHOD_CONFIGS:
@@ -347,6 +368,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
         return data_root() / "safety_kernel_noabc" / "activations"
     if method == PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE:
         return data_root() / "safety_kernel_deepfake" / "activations"
+    if method == PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE:
+        return data_root() / "precise_shield_deepfake" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -360,6 +383,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "precise_shield_union" / "neurons"
     if method == PROBE_METHOD_PRECISE_SHIELD_NOABC:
         return data_root() / "precise_shield_noabc" / "neurons"
+    if method == PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE:
+        return data_root() / "precise_shield_deepfake" / "neurons"
     if method == PROBE_METHOD_SAFETY_KERNEL_UNION:
         return data_root() / "safety_kernel_union" / "neurons"
     if method == PROBE_METHOD_SAFETY_KERNEL_NOABC:
@@ -540,12 +565,13 @@ def load_shared_neuron_rows(
     path = neurons_dir / model_alias / "shared_by_subset" / subset / cfg["shared_filename"]
     rows = read_jsonl(path)
     if not rows:
-        if cfg["namespace"] == PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE:
+        if cfg["namespace"] in {PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE, PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE}:
             raise ValueError(
                 f"{cfg['shared_label']} neuron set is empty for {model_alias}/{subset}: {path}. "
-                "SafetyKernel_Deepfake uses the strict A/B/C intersection, so this can happen when "
-                "--top-ratio is too small. Rerun SKD-5 with a larger --top-ratio "
-                "(deepfake-code default is 0.10), then rerun SKD-6 before PP-1; "
+                f"{cfg['label']} uses the strict A/B/C intersection, so this can happen when "
+                "--top-ratio is too small. Rerun the single-type paired-shift discovery stage "
+                "with a larger --top-ratio (deepfake-code default is 0.10), then rerun the "
+                "shared-neuron discovery stage before PP-1; "
                 "or run PP-1 with --subset single_hop if you intentionally want to skip multi_hop."
             )
         raise ValueError(f"{cfg['shared_label']} neuron set is empty: {path}")
