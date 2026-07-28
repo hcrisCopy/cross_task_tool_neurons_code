@@ -126,13 +126,13 @@ def expected_viz(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"ps_ctd_density_heatmap_{subset}.png",
         viz_dir / f"ps_ctd_saliency_min_heatmap_{subset}.png",
         viz_dir / f"ps_ctd_saliency_mean_heatmap_{subset}.png",
-        viz_dir / f"ps_ctd_layer_top1pct_saliency_min_heatmap_{subset}.png",
-        viz_dir / f"ps_ctd_layer_top1pct_saliency_mean_heatmap_{subset}.png",
-    ]
+    ] + [viz_dir / f"ps_ctd_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
 
 
 def legacy_layer_top_viz(viz_dir: Path, subset: str) -> list[Path]:
     return [
+        viz_dir / f"ps_ctd_layer_top1pct_saliency_min_heatmap_{subset}.png",
+        viz_dir / f"ps_ctd_layer_top1pct_saliency_mean_heatmap_{subset}.png",
         viz_dir / f"ps_ctd_layer_top3pct_saliency_min_heatmap_{subset}.png",
         viz_dir / f"ps_ctd_layer_top3pct_saliency_mean_heatmap_{subset}.png",
         viz_dir / f"ps_ctd_layer_top10_saliency_min_heatmap_{subset}.png",
@@ -303,28 +303,29 @@ def backfill_layer_top1pct_visualizations(
 
     clean_legacy_layer_top_viz(viz_dir, subset)
     targets = {
-        "score_min": viz_dir / f"ps_ctd_layer_top1pct_saliency_min_heatmap_{subset}.png",
-        "score_mean": viz_dir / f"ps_ctd_layer_top1pct_saliency_mean_heatmap_{subset}.png",
+        task_type: viz_dir / f"ps_ctd_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png"
+        for task_type in TASK_TYPES
     }
     if all(path.exists() for path in targets.values()):
         return False
 
     ctd_rows = read_jsonl(ctd_path)
     layer_dims = load_module_dims(single_dir, subset)
-    for score_field, out_path in targets.items():
+    for task_type, out_path in targets.items():
         plot_layer_top_shared_saliency_heatmap(
             ctd_rows,
             layer_dims,
             out_path,
-            score_field=score_field,
-            score_label=f"PS-CTD call saliency {score_field}",
-            title=f"{subset} PS-CTD: top 1% shared call saliency by layer ({score_field})",
+            score_field=f"score_{task_type}",
+            score_label=f"Type {task_type} PS call saliency",
+            title=f"{subset} PS-CTD: top 1% shared call saliency by layer (type {task_type})",
         )
 
     summary = read_json(subset_out / "summary.json") if (subset_out / "summary.json").exists() else manifest.get("summary", {})
     visualizations = summary.setdefault("visualizations", {})
-    visualizations["layer_top1pct_score_min_heatmap"] = str(targets["score_min"])
-    visualizations["layer_top1pct_score_mean_heatmap"] = str(targets["score_mean"])
+    visualizations.pop("layer_top1pct_score_min_heatmap", None)
+    visualizations.pop("layer_top1pct_score_mean_heatmap", None)
+    visualizations["layer_top1pct_by_type_heatmaps"] = {task_type: str(path) for task_type, path in targets.items()}
     manifest["summary"] = summary
     write_json(subset_out / "summary.json", summary)
     write_json(manifest_path, manifest)
@@ -407,27 +408,21 @@ def main() -> None:
         density_path = viz_dir / f"ps_ctd_density_heatmap_{subset}.png"
         min_path = viz_dir / f"ps_ctd_saliency_min_heatmap_{subset}.png"
         mean_path = viz_dir / f"ps_ctd_saliency_mean_heatmap_{subset}.png"
-        layer_top1pct_min_path = viz_dir / f"ps_ctd_layer_top1pct_saliency_min_heatmap_{subset}.png"
-        layer_top1pct_mean_path = viz_dir / f"ps_ctd_layer_top1pct_saliency_mean_heatmap_{subset}.png"
         plot_density(ctd_rows, layer_dims, density_path)
         plot_saliency(ctd_rows, min_path, "score_min", args.heatmap_top_n)
         plot_saliency(ctd_rows, mean_path, "score_mean", args.heatmap_top_n)
-        plot_layer_top_shared_saliency_heatmap(
-            ctd_rows,
-            layer_dims,
-            layer_top1pct_min_path,
-            score_field="score_min",
-            score_label="PS-CTD call saliency score_min",
-            title=f"{subset} PS-CTD: top 1% shared call saliency by layer (score_min)",
-        )
-        plot_layer_top_shared_saliency_heatmap(
-            ctd_rows,
-            layer_dims,
-            layer_top1pct_mean_path,
-            score_field="score_mean",
-            score_label="PS-CTD call saliency score_mean",
-            title=f"{subset} PS-CTD: top 1% shared call saliency by layer (score_mean)",
-        )
+        layer_top1pct_paths = {}
+        for task_type in TASK_TYPES:
+            layer_top1pct_path = viz_dir / f"ps_ctd_layer_top1pct_saliency_heatmap_{subset}_{task_type}.png"
+            plot_layer_top_shared_saliency_heatmap(
+                ctd_rows,
+                layer_dims,
+                layer_top1pct_path,
+                score_field=f"score_{task_type}",
+                score_label=f"Type {task_type} PS call saliency",
+                title=f"{subset} PS-CTD: top 1% shared call saliency by layer (type {task_type})",
+            )
+            layer_top1pct_paths[task_type] = str(layer_top1pct_path)
 
         summary = {
             "ps_tdn_counts": {task_type: len(sets[task_type]) for task_type in TASK_TYPES},
@@ -440,8 +435,7 @@ def main() -> None:
                 "density_heatmap": str(density_path),
                 "score_min_heatmap": str(min_path),
                 "score_mean_heatmap": str(mean_path),
-                "layer_top1pct_score_min_heatmap": str(layer_top1pct_min_path),
-                "layer_top1pct_score_mean_heatmap": str(layer_top1pct_mean_path),
+                "layer_top1pct_by_type_heatmaps": layer_top1pct_paths,
             },
         }
         write_json(subset_out / "summary.json", summary)

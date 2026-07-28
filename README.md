@@ -298,10 +298,10 @@ python code/06_shared_discovery/discover_shared_neurons.py --model-alias qwen3-4
 ../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/pairwise_<AB|AC|BC>_neurons.jsonl
 ../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
 ../cross_task_tool_neurons_data/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
-../cross_task_tool_neurons_data/visualizations/<model_alias>/shared_by_subset/ctd_layer_top1pct_scar_<min|mean>_heatmap_<subset>.png
+../cross_task_tool_neurons_data/visualizations/<model_alias>/shared_by_subset/ctd_layer_top1pct_scar_heatmap_<subset>_<A|B|C>.png
 ```
 
-方法：按完整身份 `(layer, module, index)` 精确取交集，`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，同时记录两两重叠和可视化。新增的 `ctd_layer_top1pct_scar_<min|mean>_heatmap` 按 `layer + gate_proj/up_proj/down_proj` 分行，展示 CTD 共享神经元在每层每个 FFN module 内按 `score_min` / `score_mean` 排序后的前 1% SCAR 分数；旧 CTD 产物存在时重跑本阶段会直接补图。
+方法：按完整身份 `(layer, module, index)` 精确取交集，`CTD = TDN_A ∩ TDN_B ∩ TDN_C`，同时记录两两重叠和可视化。新增的 `ctd_layer_top1pct_scar_heatmap` 按 `layer + gate_proj/up_proj/down_proj` 分行，对同一批 CTD 共享神经元分别展示其在 A/B/C 单类型发现中的原始 `score_A` / `score_B` / `score_C` SCAR 分数；旧 CTD 产物存在时重跑本阶段会直接补图，并清理旧的逐层 top1% 聚合图。
 
 ## 阶段 7：CTD-Masked LoRA 训练
 
