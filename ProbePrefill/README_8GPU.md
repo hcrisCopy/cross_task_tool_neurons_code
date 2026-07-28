@@ -37,27 +37,6 @@ PP-1 -> PP-2 -> PP-3 -> PP-4 -> PP-5
 
 PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP-4。
 
-## 上游 SafetyKernel_Union 阶段 6
-
-先按总 README 跑完阶段 1-5，再运行本并集阶段。它只读取阶段 5 的 A/B/C `TDN_neurons.jsonl`，不重新抽 activation，不重新 split。
-
-SafetyKernel_Union / CTD_Union 单卡指令：
-
-```text
-python SafetyKernel_Union/sku_discover_union_neurons.py --model-alias qwen3-4b-instruct --input-neurons-dir ../cross_task_tool_neurons_data/neurons --output-neurons-dir ../cross_task_tool_neurons_data/safety_kernel_union/neurons --visualizations-dir ../cross_task_tool_neurons_data/safety_kernel_union/visualizations --subset all --heatmap-top-n 300
-```
-
-输出：
-
-```text
-../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/CTD_Union_neurons.jsonl
-../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
-../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
-../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/*.png
-```
-
-终端打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。产物存在且 manifest 一致会提前跳过；错误旧产物在原命令末尾加 `--clean`。
-
 ## PP-1 构建全量共享神经元 Probe 特征
 
 PP-1 只读取已经完成的 activation、共享神经元和改造后的 train/test 数据，不加载生成模型，不重新 split。`train` 用于训练 probe，`test` 用于后续评测。PP-1 本身没有多卡/单卡差异；下面命令都是单卡正式实验可直接运行的命令。
