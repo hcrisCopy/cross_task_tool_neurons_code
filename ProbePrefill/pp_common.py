@@ -40,12 +40,14 @@ PP_STAGE_VERSION = 1
 PP_METHOD = "CTD-Probe&Prefill"
 PROBE_METHOD_SAFETY_KERNEL = "safety_kernel"
 PROBE_METHOD_SAFETY_KERNEL_UNION = "safety_kernel_union"
+PROBE_METHOD_SAFETY_KERNEL_NOABC = "safety_kernel_noabc"
 PROBE_METHOD_PRECISE_SHIELD = "precise_shield"
 PROBE_METHOD_PRECISE_SHIELD_UNION = "precise_shield_union"
 PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
+    PROBE_METHOD_SAFETY_KERNEL_NOABC,
     PROBE_METHOD_PRECISE_SHIELD,
     PROBE_METHOD_PRECISE_SHIELD_UNION,
     PROBE_METHOD_PRECISE_SHIELD_NOABC,
@@ -76,6 +78,19 @@ PROBE_METHOD_CONFIGS = {
         "feature_definition": "stage4 last-input-token FFN output activation restricted to SafetyKernel_Union stage6 CTD_Union neurons",
         "train_probe_method": "CTD_Union logistic probe",
         "probe_prefill_method": "SafetyKernel_Union-CTD_Union-Probe&Prefill",
+    },
+    PROBE_METHOD_SAFETY_KERNEL_NOABC: {
+        "namespace": "safety_kernel_noabc",
+        "label": "SafetyKernel_noABC",
+        "shared_label": "SK_noABC_TDN",
+        "single_label": "SK_noABC_TDN",
+        "shared_filename": "SK_noABC_TDN_neurons.jsonl",
+        "single_filename": "SK_noABC_TDN_neurons.jsonl",
+        "feature_set": "SK_noABC_TDN",
+        "feature_description": "SafetyKernel_noABC global tool-decision FFN output last-token activations",
+        "feature_definition": "stage4 last-input-token FFN output activation restricted to noABC TopK SCAR(tool_necessary=1 vs 0) neurons",
+        "train_probe_method": "SK_noABC_TDN logistic probe",
+        "probe_prefill_method": "SafetyKernel_noABC-SK_noABC_TDN-Probe&Prefill",
     },
     PROBE_METHOD_PRECISE_SHIELD: {
         "namespace": "precise_shield",
@@ -133,6 +148,7 @@ __all__ = [
     "PROBE_METHOD_PRECISE_SHIELD_NOABC",
     "PROBE_METHOD_PRECISE_SHIELD_UNION",
     "PROBE_METHOD_SAFETY_KERNEL",
+    "PROBE_METHOD_SAFETY_KERNEL_NOABC",
     "PROBE_METHOD_SAFETY_KERNEL_UNION",
     "SUPPORTED_PROBE_METHODS",
     "classification_metrics",
@@ -234,6 +250,11 @@ def normalize_probe_method(value: str | None) -> str:
         "ctd_union": PROBE_METHOD_SAFETY_KERNEL_UNION,
         "safetykernelunion": PROBE_METHOD_SAFETY_KERNEL_UNION,
         "safety_kernel_union_ctd": PROBE_METHOD_SAFETY_KERNEL_UNION,
+        "skna": PROBE_METHOD_SAFETY_KERNEL_NOABC,
+        "sk_noabc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
+        "sk_no_abc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
+        "safetykernelnoabc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
+        "safety_kernel_no_abc": PROBE_METHOD_SAFETY_KERNEL_NOABC,
         "ps": PROBE_METHOD_PRECISE_SHIELD,
         "preciseshield": PROBE_METHOD_PRECISE_SHIELD,
         "ps_ctd": PROBE_METHOD_PRECISE_SHIELD,
@@ -301,6 +322,8 @@ def prepare_probe_method_root(root: Path, probe_method: str | None) -> Path:
 
 def default_method_activations_dir(probe_method: str | None) -> Path:
     method = normalize_probe_method(probe_method)
+    if method == PROBE_METHOD_SAFETY_KERNEL_NOABC:
+        return data_root() / "safety_kernel_noabc" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -316,6 +339,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "precise_shield_noabc" / "neurons"
     if method == PROBE_METHOD_SAFETY_KERNEL_UNION:
         return data_root() / "safety_kernel_union" / "neurons"
+    if method == PROBE_METHOD_SAFETY_KERNEL_NOABC:
+        return data_root() / "safety_kernel_noabc" / "neurons"
     return path_from_config("neurons_dir")
 
 

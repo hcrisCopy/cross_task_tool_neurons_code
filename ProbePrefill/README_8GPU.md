@@ -22,12 +22,13 @@
 ```text
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/
+../cross_task_tool_neurons_data/probe_prefill/safety_kernel_noabc/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_union/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield_noabc/
 ```
 
-`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。
 
 ## 运行顺序
 
@@ -53,6 +54,12 @@ SafetyKernel_Union / CTD_Union 单卡指令：
 
 ```text
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_union --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
+```
+
+SafetyKernel_noABC / SK_noABC_TDN 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_noabc --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy balanced --require-per-type-labels --seed 2026
 ```
 
 PreciseShield / PS-CTD 单卡指令：
@@ -87,6 +94,12 @@ SafetyKernel_Union / CTD_Union 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_union --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+SafetyKernel_noABC / SK_noABC_TDN 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method safety_kernel_noabc --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 PreciseShield / PS-CTD 单卡指令：
