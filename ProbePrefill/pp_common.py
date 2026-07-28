@@ -47,6 +47,7 @@ PROBE_METHOD_PRECISE_SHIELD_UNION = "precise_shield_union"
 PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
 PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE = "precise_shield_deepfake"
 PROBE_METHOD_TOOL_DECISION_ANCHORS = "tool_decision_anchors"
+PROBE_METHOD_RESIDUAL_DECISION_ANCHORS = "residual_decision_anchors"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
@@ -57,6 +58,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_PRECISE_SHIELD_NOABC,
     PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
     PROBE_METHOD_TOOL_DECISION_ANCHORS,
+    PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
 )
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
@@ -176,6 +178,19 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "TDA_CTD logistic probe",
         "probe_prefill_method": "ToolDecisionAnchors-TDA_CTD-Probe&Prefill",
     },
+    PROBE_METHOD_RESIDUAL_DECISION_ANCHORS: {
+        "namespace": "residual_decision_anchors",
+        "label": "ResidualDecisionAnchors",
+        "shared_label": "RDA_CTD",
+        "single_label": "RDA_TDN",
+        "shared_filename": "RDA_CTD_neurons.jsonl",
+        "single_filename": "RDA_TDN_neurons.jsonl",
+        "feature_set": "RDA_CTD",
+        "feature_description": "ResidualDecisionAnchors shared residual-state signed-consensus dimensions",
+        "feature_definition": "RDA-4 all-layer last-input-token residual hidden activations restricted to RDA-5 direction-consistent A/B/C shared dimensions",
+        "train_probe_method": "RDA_CTD logistic probe",
+        "probe_prefill_method": "ResidualDecisionAnchors-RDA_CTD-Probe&Prefill",
+    },
 }
 PP_SUBDIRS = {
     "features": "probe_features",
@@ -193,6 +208,7 @@ __all__ = [
     "PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE",
     "PROBE_METHOD_PRECISE_SHIELD_NOABC",
     "PROBE_METHOD_PRECISE_SHIELD_UNION",
+    "PROBE_METHOD_RESIDUAL_DECISION_ANCHORS",
     "PROBE_METHOD_SAFETY_KERNEL",
     "PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE",
     "PROBE_METHOD_SAFETY_KERNEL_NOABC",
@@ -330,6 +346,11 @@ def normalize_probe_method(value: str | None) -> str:
         "tool_decision_anchor": PROBE_METHOD_TOOL_DECISION_ANCHORS,
         "tool_decision_anchors": PROBE_METHOD_TOOL_DECISION_ANCHORS,
         "tda_ctd": PROBE_METHOD_TOOL_DECISION_ANCHORS,
+        "rda": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        "residualdecisionanchors": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        "residual_decision_anchor": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        "residual_decision_anchors": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        "rda_ctd": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
     }
     method = aliases.get(method, method)
     if method not in PROBE_METHOD_CONFIGS:
@@ -393,6 +414,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
         return data_root() / "precise_shield_deepfake" / "activations"
     if method == PROBE_METHOD_TOOL_DECISION_ANCHORS:
         return data_root() / "tool_decision_anchors" / "activations"
+    if method == PROBE_METHOD_RESIDUAL_DECISION_ANCHORS:
+        return data_root() / "residual_decision_anchors" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -416,6 +439,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "safety_kernel_deepfake" / "neurons"
     if method == PROBE_METHOD_TOOL_DECISION_ANCHORS:
         return data_root() / "tool_decision_anchors" / "neurons"
+    if method == PROBE_METHOD_RESIDUAL_DECISION_ANCHORS:
+        return data_root() / "residual_decision_anchors" / "neurons"
     return path_from_config("neurons_dir")
 
 
@@ -590,7 +615,12 @@ def load_shared_neuron_rows(
     path = neurons_dir / model_alias / "shared_by_subset" / subset / cfg["shared_filename"]
     rows = read_jsonl(path)
     if not rows:
-        if cfg["namespace"] in {PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE, PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE, PROBE_METHOD_TOOL_DECISION_ANCHORS}:
+        if cfg["namespace"] in {
+            PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE,
+            PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
+            PROBE_METHOD_TOOL_DECISION_ANCHORS,
+            PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        }:
             raise ValueError(
                 f"{cfg['shared_label']} neuron set is empty for {model_alias}/{subset}: {path}. "
                 f"{cfg['label']} uses the strict A/B/C intersection, so this can happen when "
