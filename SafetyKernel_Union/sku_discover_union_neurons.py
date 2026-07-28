@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import torch
 
 from cttn.data import SUBSETS, TASK_TYPES
 from cttn.io import read_json, read_jsonl, write_json, write_jsonl
@@ -25,6 +26,8 @@ from cttn.progress import progress
 STAGE_VERSION = 1
 METHOD_NAME = "SafetyKernel_Union"
 UNION_FILENAME = "CTD_Union_neurons.jsonl"
+LAYER_TOP_SCORE_RATIO = 0.01
+MODULE_ORDER = ["gate_proj", "up_proj", "down_proj"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +63,10 @@ def single_type_root(input_neurons_root: Path, model_alias: str) -> Path:
 
 def shared_root(output_neurons_root: Path, model_alias: str) -> Path:
     return output_neurons_root / model_alias / "shared_by_subset"
+
+
+def single_type_viz_root(viz_root: Path, model_alias: str) -> Path:
+    return viz_root / model_alias / "single_type_by_subset"
 
 
 def read_tdn(root: Path, subset: str, task_type: str) -> dict[tuple[int, str, int], dict[str, Any]]:
@@ -118,6 +125,13 @@ def load_module_dims(single_root: Path, subset: str) -> dict[tuple[int, str], in
         return {}
     module_meta = read_json(meta_path)
     return {(int(meta["layer"]), str(meta["module"])): int(meta["dim"]) for meta in module_meta}
+
+
+def load_module_meta(single_root: Path, subset: str) -> list[dict[str, Any]]:
+    meta_path = single_root / subset / "module_meta.json"
+    if not meta_path.exists():
+        return []
+    return read_json(meta_path)
 
 
 def write_counts_csv(rows: list[dict[str, Any]], path: Path, field: str) -> None:
@@ -222,17 +236,202 @@ def plot_scar_heatmap(rows: list[dict[str, Any]], out_path: Path, score_field: s
     plt.close(fig)
 
 
+def module_groups(module_dims: dict[tuple[int, str], int], rows: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    if module_dims:
+        groups = list(module_dims)
+    else:
+        groups = [(int(row["layer"]), str(row["module"])) for row in rows]
+    module_order = {name: idx for idx, name in enumerate(MODULE_ORDER)}
+    return sorted(set(groups), key=lambda item: (item[0], module_order.get(item[1], 99), item[1]))
+
+
+def plot_layer_top_union_score_heatmap(
+    rows: list[dict[str, Any]],
+    module_dims: dict[tuple[int, str], int],
+    out_path: Path,
+    *,
+    score_field: str,
+    score_label: str,
+    title: str,
+    ratio: float = LAYER_TOP_SCORE_RATIO,
+) -> None:
+    groups = module_groups(module_dims, rows)
+    row_values: list[list[float]] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for layer, module in groups:
+        candidates = [
+            float(row[score_field])
+            for row in rows
+            if int(row["layer"]) == layer and str(row["module"]) == module and row.get(score_field) is not None
+        ]
+        dim = max(module_dims.get((layer, module), len(candidates)), 1)
+        k = max(1, int(dim * ratio))
+        candidates.sort(reverse=True)
+        values = candidates[: min(k, len(candidates))]
+        row_values.append(values)
+        row_labels.append(f"L{layer}.{module}")
+        max_cols = max(max_cols, k, len(values))
+
+    if not row_values or not any(row_values) or max_cols <= 0:
+        write_empty_plot(out_path, title)
+        return
+
+    matrix = [[float("nan") for _ in range(max_cols)] for _ in row_values]
+    for row_idx, values in enumerate(row_values):
+        for col_idx, value in enumerate(values):
+            matrix[row_idx][col_idx] = value
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.16)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel(f"Neuron rank within top {int(ratio * 100)}% of each layer/module")
+    ax.set_ylabel("Layer / FFN module")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label=score_label)
+    fig.tight_layout()
+    ensure_dir(out_path.parent)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def plot_single_type_layer_top_scar_heatmap(
+    *,
+    score_pack: dict[str, dict[str, torch.Tensor]],
+    module_meta: list[dict[str, Any]],
+    out_path: Path,
+    title: str,
+    ratio: float = LAYER_TOP_SCORE_RATIO,
+) -> None:
+    module_order = {name: idx for idx, name in enumerate(MODULE_ORDER)}
+    ordered_meta = sorted(
+        module_meta,
+        key=lambda meta: (int(meta["layer"]), module_order.get(str(meta["module"]), 99), str(meta.get("key", ""))),
+    )
+    row_values: list[torch.Tensor] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for meta in ordered_meta:
+        key = str(meta["key"])
+        scores = score_pack.get(key, {}).get("scar")
+        if scores is None:
+            continue
+        values = scores.detach().float().cpu()
+        k = max(1, int(values.numel() * ratio))
+        k = min(k, values.numel())
+        top_values = torch.topk(values, k).values
+        row_values.append(top_values)
+        row_labels.append(f"L{int(meta['layer'])}.{meta['module']}")
+        max_cols = max(max_cols, k)
+
+    if not row_values or max_cols <= 0:
+        write_empty_plot(out_path, title)
+        return
+
+    matrix = torch.full((len(row_values), max_cols), float("nan"), dtype=torch.float32)
+    for row_idx, values in enumerate(row_values):
+        matrix[row_idx, : values.numel()] = values
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.16)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix.numpy(), aspect="auto", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel(f"Neuron rank within top {int(ratio * 100)}% of each layer/module")
+    ax.set_ylabel("Layer / FFN module")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label="SCAR")
+    fig.tight_layout()
+    ensure_dir(out_path.parent)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def plot_single_type_layer_top1pct_visualizations(
+    single_root: Path,
+    single_viz_dir: Path,
+    subset: str,
+) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    module_meta = load_module_meta(single_root, subset)
+    for task_type in TASK_TYPES:
+        scores_path = single_root / subset / task_type / "scar_scores.pt"
+        if not scores_path.exists():
+            raise FileNotFoundError(f"Missing Safety Kernel SCAR scores for SKU single-type plot: {scores_path}")
+        payload = torch.load(scores_path, map_location="cpu")
+        payload_meta = payload.get("module_meta") or module_meta
+        score_pack = payload.get("scores")
+        if not isinstance(score_pack, dict):
+            raise ValueError(f"Invalid Safety Kernel SCAR score payload: {scores_path}")
+        out_path = single_viz_dir / f"sku_layer_top1pct_scar_heatmap_{subset}_{task_type}.png"
+        plot_single_type_layer_top_scar_heatmap(
+            score_pack=score_pack,
+            module_meta=payload_meta,
+            out_path=out_path,
+            title=f"{subset} SKU Type {task_type}: top 1% SCAR by layer/module",
+        )
+        paths[task_type] = str(out_path)
+    return paths
+
+
 def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
     return [
         viz_dir / f"ctd_union_density_heatmap_{subset}.png",
         viz_dir / f"ctd_union_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_union_scar_mean_heatmap_{subset}.png",
+        viz_dir / f"ctd_union_layer_top1pct_scar_min_heatmap_{subset}.png",
+        viz_dir / f"ctd_union_layer_top1pct_scar_mean_heatmap_{subset}.png",
     ]
 
 
-def clean_visualizations(viz_dir: Path, subset: str) -> None:
+def expected_single_type_visualizations(single_viz_dir: Path, subset: str) -> list[Path]:
+    return [single_viz_dir / f"sku_layer_top1pct_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+
+
+def legacy_visualizations(viz_dir: Path, single_viz_dir: Path, subset: str) -> list[Path]:
+    shared_names = [
+        f"ctd_union_layer_top3pct_scar_min_heatmap_{subset}.png",
+        f"ctd_union_layer_top3pct_scar_mean_heatmap_{subset}.png",
+        f"ctd_union_layer_top10_scar_min_heatmap_{subset}.png",
+        f"ctd_union_layer_top10_scar_mean_heatmap_{subset}.png",
+    ]
+    single_names = [
+        f"sku_layer_top3pct_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES
+    ] + [f"sku_layer_top10_scar_heatmap_{subset}_{task_type}.png" for task_type in TASK_TYPES]
+    return [viz_dir / name for name in shared_names] + [single_viz_dir / name for name in single_names]
+
+
+def clean_visualizations(viz_dir: Path, single_viz_dir: Path, subset: str) -> None:
     root = data_root().resolve()
-    for path in expected_visualizations(viz_dir, subset):
+    for path in [
+        *expected_visualizations(viz_dir, subset),
+        *expected_single_type_visualizations(single_viz_dir, subset),
+        *legacy_visualizations(viz_dir, single_viz_dir, subset),
+    ]:
+        if path.exists():
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError(f"Refusing to remove visualization outside data root: {resolved}")
+            path.unlink()
+
+
+def clean_legacy_visualizations(viz_dir: Path, single_viz_dir: Path, subset: str) -> None:
+    root = data_root().resolve()
+    for path in legacy_visualizations(viz_dir, single_viz_dir, subset):
         if path.exists():
             resolved = path.resolve()
             if not resolved.is_relative_to(root):
@@ -264,7 +463,7 @@ def expected_params(
     }
 
 
-def expected_outputs(out_dir: Path, viz_dir: Path, subset: str) -> list[Path]:
+def expected_outputs(out_dir: Path, viz_dir: Path, single_viz_dir: Path, subset: str) -> list[Path]:
     return [
         out_dir / UNION_FILENAME,
         out_dir / "pairwise_AB_neurons.jsonl",
@@ -280,15 +479,25 @@ def expected_outputs(out_dir: Path, viz_dir: Path, subset: str) -> list[Path]:
         out_dir / "summary.json",
         out_dir / "manifest.json",
         *expected_visualizations(viz_dir, subset),
+        *expected_single_type_visualizations(single_viz_dir, subset),
     ]
 
 
-def should_skip(out_dir: Path, viz_dir: Path, subset: str, params: dict[str, Any], *, overwrite: bool, clean: bool) -> bool:
+def should_skip(
+    out_dir: Path,
+    viz_dir: Path,
+    single_viz_dir: Path,
+    subset: str,
+    params: dict[str, Any],
+    *,
+    overwrite: bool,
+    clean: bool,
+) -> bool:
     if clean:
         clean_directory(out_dir, data_root())
-        clean_visualizations(viz_dir, subset)
+        clean_visualizations(viz_dir, single_viz_dir, subset)
         return False
-    expected = expected_outputs(out_dir, viz_dir, subset)
+    expected = expected_outputs(out_dir, viz_dir, single_viz_dir, subset)
     if overwrite or not all(path.exists() for path in expected):
         return False
     manifest = read_json(out_dir / "manifest.json")
@@ -296,6 +505,76 @@ def should_skip(out_dir: Path, viz_dir: Path, subset: str, params: dict[str, Any
         print(f"Skip existing CTD-Union neurons: {out_dir}")
         return True
     return False
+
+
+def backfill_visualizations(
+    out_dir: Path,
+    viz_dir: Path,
+    single_viz_dir: Path,
+    single_root: Path,
+    subset: str,
+    params: dict[str, Any],
+    heatmap_top_n: int,
+) -> bool:
+    manifest_path = out_dir / "manifest.json"
+    union_path = out_dir / UNION_FILENAME
+    if not manifest_path.exists() or not union_path.exists():
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") != params:
+        return False
+
+    clean_legacy_visualizations(viz_dir, single_viz_dir, subset)
+    targets = [*expected_visualizations(viz_dir, subset), *expected_single_type_visualizations(single_viz_dir, subset)]
+    if all(path.exists() for path in targets):
+        return False
+
+    union_rows = read_jsonl(union_path)
+    module_dims = load_module_dims(single_root, subset)
+
+    density_path = viz_dir / f"ctd_union_density_heatmap_{subset}.png"
+    score_min_path = viz_dir / f"ctd_union_scar_min_heatmap_{subset}.png"
+    score_mean_path = viz_dir / f"ctd_union_scar_mean_heatmap_{subset}.png"
+    layer_top1pct_min_path = viz_dir / f"ctd_union_layer_top1pct_scar_min_heatmap_{subset}.png"
+    layer_top1pct_mean_path = viz_dir / f"ctd_union_layer_top1pct_scar_mean_heatmap_{subset}.png"
+    plot_density(union_rows, module_dims, density_path)
+    plot_scar_heatmap(union_rows, score_min_path, "score_min", heatmap_top_n)
+    plot_scar_heatmap(union_rows, score_mean_path, "score_mean", heatmap_top_n)
+    plot_layer_top_union_score_heatmap(
+        union_rows,
+        module_dims,
+        layer_top1pct_min_path,
+        score_field="score_min",
+        score_label="CTD-Union SCAR score_min",
+        title=f"{subset} CTD-Union: top 1% SCAR by layer/module (score_min)",
+    )
+    plot_layer_top_union_score_heatmap(
+        union_rows,
+        module_dims,
+        layer_top1pct_mean_path,
+        score_field="score_mean",
+        score_label="CTD-Union SCAR score_mean",
+        title=f"{subset} CTD-Union: top 1% SCAR by layer/module (score_mean)",
+    )
+    single_top_paths = plot_single_type_layer_top1pct_visualizations(single_root, single_viz_dir, subset)
+
+    summary = read_json(out_dir / "summary.json") if (out_dir / "summary.json").exists() else manifest.get("summary", {})
+    visualizations = summary.setdefault("visualizations", {})
+    visualizations.update(
+        {
+            "density_heatmap": str(density_path),
+            "score_min_heatmap": str(score_min_path),
+            "score_mean_heatmap": str(score_mean_path),
+            "layer_top1pct_score_min_heatmap": str(layer_top1pct_min_path),
+            "layer_top1pct_score_mean_heatmap": str(layer_top1pct_mean_path),
+            "single_type_layer_top1pct_scar_heatmaps": single_top_paths,
+        }
+    )
+    manifest["summary"] = summary
+    write_json(out_dir / "summary.json", summary)
+    write_json(manifest_path, manifest)
+    print(f"Backfilled SafetyKernel_Union top-1% visualizations: {out_dir}")
+    return True
 
 
 def source_membership_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -314,6 +593,7 @@ def main() -> None:
     single_root = single_type_root(input_neurons_root, args.model_alias)
     shared_dir = shared_root(output_neurons_root, args.model_alias)
     viz_dir = viz_root / args.model_alias / "shared_by_subset"
+    single_viz_dir = single_type_viz_root(viz_root, args.model_alias)
     root_manifest: dict[str, Any] = {
         "stage": "safety_kernel_union_06_shared_discovery",
         "stage_version": STAGE_VERSION,
@@ -336,7 +616,40 @@ def main() -> None:
             viz_root=viz_root,
             single_manifest=read_json(single_manifest_path),
         )
-        if should_skip(subset_out, viz_dir, subset, params, overwrite=args.overwrite, clean=args.clean):
+        if (
+            not args.overwrite
+            and not args.clean
+            and backfill_visualizations(
+                subset_out,
+                viz_dir,
+                single_viz_dir,
+                single_root,
+                subset,
+                params,
+                args.heatmap_top_n,
+            )
+            and should_skip(
+                subset_out,
+                viz_dir,
+                single_viz_dir,
+                subset,
+                params,
+                overwrite=args.overwrite,
+                clean=args.clean,
+            )
+        ):
+            root_manifest["subsets"][subset] = read_json(subset_out / "summary.json")
+            global_share_rows.extend(read_csv_rows(subset_out / "share_rates.csv"))
+            continue
+        if should_skip(
+            subset_out,
+            viz_dir,
+            single_viz_dir,
+            subset,
+            params,
+            overwrite=args.overwrite,
+            clean=args.clean,
+        ):
             root_manifest["subsets"][subset] = read_json(subset_out / "summary.json")
             global_share_rows.extend(read_csv_rows(subset_out / "share_rates.csv"))
             continue
@@ -391,9 +704,28 @@ def main() -> None:
         density_path = viz_dir / f"ctd_union_density_heatmap_{subset}.png"
         score_min_path = viz_dir / f"ctd_union_scar_min_heatmap_{subset}.png"
         score_mean_path = viz_dir / f"ctd_union_scar_mean_heatmap_{subset}.png"
+        layer_top1pct_min_path = viz_dir / f"ctd_union_layer_top1pct_scar_min_heatmap_{subset}.png"
+        layer_top1pct_mean_path = viz_dir / f"ctd_union_layer_top1pct_scar_mean_heatmap_{subset}.png"
         plot_density(union_rows, module_dims, density_path)
         plot_scar_heatmap(union_rows, score_min_path, "score_min", args.heatmap_top_n)
         plot_scar_heatmap(union_rows, score_mean_path, "score_mean", args.heatmap_top_n)
+        plot_layer_top_union_score_heatmap(
+            union_rows,
+            module_dims,
+            layer_top1pct_min_path,
+            score_field="score_min",
+            score_label="CTD-Union SCAR score_min",
+            title=f"{subset} CTD-Union: top 1% SCAR by layer/module (score_min)",
+        )
+        plot_layer_top_union_score_heatmap(
+            union_rows,
+            module_dims,
+            layer_top1pct_mean_path,
+            score_field="score_mean",
+            score_label="CTD-Union SCAR score_mean",
+            title=f"{subset} CTD-Union: top 1% SCAR by layer/module (score_mean)",
+        )
+        single_top_paths = plot_single_type_layer_top1pct_visualizations(single_root, single_viz_dir, subset)
 
         summary = {
             "tdn_counts": {task_type: len(sets[task_type]) for task_type in TASK_TYPES},
@@ -409,6 +741,9 @@ def main() -> None:
                 "density_heatmap": str(density_path),
                 "score_min_heatmap": str(score_min_path),
                 "score_mean_heatmap": str(score_mean_path),
+                "layer_top1pct_score_min_heatmap": str(layer_top1pct_min_path),
+                "layer_top1pct_score_mean_heatmap": str(layer_top1pct_mean_path),
+                "single_type_layer_top1pct_scar_heatmaps": single_top_paths,
             },
         }
         write_json(subset_out / "summary.json", summary)

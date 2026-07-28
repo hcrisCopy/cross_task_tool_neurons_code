@@ -182,9 +182,10 @@ python PreciseShield/ps_discover_shared_neurons.py --model-alias qwen3-4b-instru
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/shared_by_subset/<subset>/pairwise_AB_neurons.jsonl
 ../cross_task_tool_neurons_data/precise_shield/neurons/<model_alias>/shared_by_subset/<subset>/private_A_neurons.jsonl
 ../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/shared_by_subset/*.png
+../cross_task_tool_neurons_data/precise_shield/visualizations/<model_alias>/shared_by_subset/ps_ctd_layer_top1pct_saliency_<min|mean>_heatmap_<subset>.png
 ```
 
-做法：按完整身份 `(layer, index)` 取交集，`PS_CTD = A ∩ B ∩ C`。pairwise 和 private 只用于分析和因果对照。
+做法：按完整身份 `(layer, index)` 取交集，`PS_CTD = A ∩ B ∩ C`。pairwise 和 private 只用于分析和因果对照。新增的 `ps_ctd_layer_top1pct_saliency_<min|mean>_heatmap` 按 PreciseShield 的 `layer + ffn_intermediate` 神经元定义分行，展示 PS-CTD 共享神经元在每层内按 `score_min` / `score_mean` 排序后的前 1% `S_call` saliency 分数；旧 PS-CTD 产物存在时重跑本阶段会直接补图。
 
 ## PS-7：PreciseShield-Masked-LoRA 训练
 

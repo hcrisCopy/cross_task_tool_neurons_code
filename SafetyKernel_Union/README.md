@@ -28,6 +28,7 @@ python SafetyKernel_Union/sku_discover_union_neurons.py --model-alias qwen3-4b-i
 
 ```text
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TDN_neurons.jsonl
+../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/scar_scores.pt
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/manifest.json
 ../cross_task_tool_neurons_data/neurons/<model_alias>/single_type_by_subset/<subset>/module_meta.json
 ```
@@ -42,9 +43,11 @@ python SafetyKernel_Union/sku_discover_union_neurons.py --model-alias qwen3-4b-i
 ../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
 ../cross_task_tool_neurons_data/safety_kernel_union/neurons/<model_alias>/shared_by_subset/<subset>/manifest.json
 ../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/*.png
+../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/shared_by_subset/ctd_union_layer_top1pct_scar_<min|mean>_heatmap_<subset>.png
+../cross_task_tool_neurons_data/safety_kernel_union/visualizations/<model_alias>/single_type_by_subset/sku_layer_top1pct_scar_heatmap_<subset>_<A|B|C>.png
 ```
 
-终端会打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。产物存在且 manifest 参数一致时会提前跳过。
+终端会打印每个 subset 的 `CTD_Union` 数量、三类交集数量、两两重叠数量和 membership 分布。新增的 `sku_layer_top1pct_scar_heatmap` 复用阶段 5 的 Safety Kernel SCAR 分数，按 `layer + gate_proj/up_proj/down_proj` 展示 A/B/C 单类型每层每个 FFN module 前 1% 神经元分数；`ctd_union_layer_top1pct_scar_<min|mean>_heatmap` 展示 CTD-Union 集合内按 `score_min` / `score_mean` 排序后的共享/并集 top1% 分数。产物存在且 manifest 参数一致时会提前跳过；如果旧 `CTD_Union` 产物存在但缺少新图，重跑本命令会直接补图。
 
 ## 重跑与清理
 

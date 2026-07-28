@@ -21,6 +21,10 @@ from cttn.io import read_json, read_jsonl, write_json, write_jsonl
 from cttn.paths import clean_directory, data_root, ensure_dir, path_from_config, resolve_path
 
 
+LAYER_TOP_SCORE_RATIO = 0.01
+MODULE_ORDER = ["gate_proj", "up_proj", "down_proj"]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage 6: discover CTD shared neurons by A/B/C intersection.")
     parser.add_argument("--model-alias", required=True)
@@ -83,12 +87,27 @@ def write_counts_csv(rows: list[dict[str, Any]], path: Path, field: str) -> None
             writer.writerow([key, count])
 
 
+def write_empty_plot(out_path: Path, title: str) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.set_title(title)
+    ax.text(0.5, 0.5, "No neurons", ha="center", va="center")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def plot_heatmap(rows: list[dict[str, Any]], module_dims: dict[tuple[int, str], int], out_path: Path) -> None:
     if module_dims:
         layers = sorted({layer for layer, _ in module_dims})
     else:
         layers = sorted({int(row["layer"]) for row in rows})
-    modules = ["gate_proj", "up_proj", "down_proj"]
+    if not layers:
+        write_empty_plot(out_path, "CTD Shared Neurons")
+        return
+    modules = MODULE_ORDER
     counts = Counter((int(row["layer"]), str(row["module"])) for row in rows)
     matrix = []
     for layer in layers:
@@ -116,6 +135,7 @@ def plot_ctd_scar_heatmap(rows: list[dict[str, Any]], out_path: Path, score_fiel
     scored_rows.sort(key=lambda row: float(row[score_field]), reverse=True)
     selected = scored_rows[: max(1, min(top_n, len(scored_rows)))]
     if not selected:
+        write_empty_plot(out_path, f"CTD-SCAR ({score_field})")
         return
     group_order = sorted({(int(row["layer"]), str(row["module"])) for row in selected})
     group_to_y = {group: i for i, group in enumerate(group_order)}
@@ -143,6 +163,73 @@ def plot_ctd_scar_heatmap(rows: list[dict[str, Any]], out_path: Path, score_fiel
     plt.close(fig)
 
 
+def module_groups(module_dims: dict[tuple[int, str], int], rows: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    if module_dims:
+        groups = list(module_dims)
+    else:
+        groups = [(int(row["layer"]), str(row["module"])) for row in rows]
+    module_order = {name: idx for idx, name in enumerate(MODULE_ORDER)}
+    return sorted(set(groups), key=lambda item: (item[0], module_order.get(item[1], 99), item[1]))
+
+
+def plot_layer_top_shared_score_heatmap(
+    rows: list[dict[str, Any]],
+    module_dims: dict[tuple[int, str], int],
+    out_path: Path,
+    *,
+    score_field: str,
+    score_label: str,
+    title: str,
+    ratio: float = LAYER_TOP_SCORE_RATIO,
+) -> None:
+    groups = module_groups(module_dims, rows)
+    row_values: list[list[float]] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for layer, module in groups:
+        candidates = [
+            float(row[score_field])
+            for row in rows
+            if int(row["layer"]) == layer and str(row["module"]) == module and row.get(score_field) is not None
+        ]
+        dim = max(module_dims.get((layer, module), len(candidates)), 1)
+        k = max(1, int(dim * ratio))
+        candidates.sort(reverse=True)
+        values = candidates[: min(k, len(candidates))]
+        row_values.append(values)
+        row_labels.append(f"L{layer}.{module}")
+        max_cols = max(max_cols, k, len(values))
+
+    if not row_values or not any(row_values) or max_cols <= 0:
+        write_empty_plot(out_path, title)
+        return
+
+    matrix = [[float("nan") for _ in range(max_cols)] for _ in row_values]
+    for row_idx, values in enumerate(row_values):
+        for col_idx, value in enumerate(values):
+            matrix[row_idx][col_idx] = value
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.16)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel(f"Neuron rank within top {int(ratio * 100)}% of each layer/module")
+    ax.set_ylabel("Layer / FFN module")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label=score_label)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def load_module_dims(single_root: Path, subset: str) -> dict[tuple[int, str], int]:
     meta_path = single_root / subset / "module_meta.json"
     if not meta_path.exists():
@@ -156,13 +243,31 @@ def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"shared_neuron_heatmap_{subset}.png",
         viz_dir / f"ctd_scar_min_heatmap_{subset}.png",
         viz_dir / f"ctd_scar_mean_heatmap_{subset}.png",
+        viz_dir / f"ctd_layer_top1pct_scar_min_heatmap_{subset}.png",
+        viz_dir / f"ctd_layer_top1pct_scar_mean_heatmap_{subset}.png",
     ]
+
+
+def legacy_layer_top_visualizations(viz_dir: Path, subset: str) -> list[Path]:
+    return [
+        viz_dir / f"ctd_layer_top3pct_scar_min_heatmap_{subset}.png",
+        viz_dir / f"ctd_layer_top3pct_scar_mean_heatmap_{subset}.png",
+        viz_dir / f"ctd_layer_top10_scar_min_heatmap_{subset}.png",
+        viz_dir / f"ctd_layer_top10_scar_mean_heatmap_{subset}.png",
+    ]
+
+
+def clean_legacy_layer_top_visualizations(viz_dir: Path, subset: str) -> None:
+    for path in legacy_layer_top_visualizations(viz_dir, subset):
+        if path.exists():
+            path.unlink()
 
 
 def clean_visualizations(viz_dir: Path, subset: str) -> None:
     for path in expected_visualizations(viz_dir, subset):
         if path.exists():
             path.unlink()
+    clean_legacy_layer_top_visualizations(viz_dir, subset)
 
 
 def expected_params(args: argparse.Namespace, *, single_manifest: dict[str, Any], subset: str) -> dict[str, Any]:
@@ -191,6 +296,51 @@ def should_skip(out_dir: Path, viz_dir: Path, subset: str, params: dict[str, Any
     return False
 
 
+def backfill_layer_top1pct_visualizations(
+    out_dir: Path,
+    viz_dir: Path,
+    single_root: Path,
+    subset: str,
+    params: dict[str, Any],
+) -> bool:
+    manifest_path = out_dir / "manifest.json"
+    ctd_path = out_dir / "CTD_neurons.jsonl"
+    if not manifest_path.exists() or not ctd_path.exists():
+        return False
+    manifest = read_json(manifest_path)
+    if manifest.get("params") != params:
+        return False
+    clean_legacy_layer_top_visualizations(viz_dir, subset)
+    targets = {
+        "score_min": viz_dir / f"ctd_layer_top1pct_scar_min_heatmap_{subset}.png",
+        "score_mean": viz_dir / f"ctd_layer_top1pct_scar_mean_heatmap_{subset}.png",
+    }
+    if all(path.exists() for path in targets.values()):
+        return False
+
+    ctd_rows = read_jsonl(ctd_path)
+    module_dims = load_module_dims(single_root, subset)
+    for score_field, out_path in targets.items():
+        plot_layer_top_shared_score_heatmap(
+            ctd_rows,
+            module_dims,
+            out_path,
+            score_field=score_field,
+            score_label=f"CTD SCAR {score_field}",
+            title=f"{subset} CTD: top 1% shared SCAR by layer/module ({score_field})",
+        )
+
+    summary = read_json(out_dir / "summary.json") if (out_dir / "summary.json").exists() else manifest.get("summary", {})
+    scar_visualizations = summary.setdefault("scar_visualizations", {})
+    scar_visualizations["layer_top1pct_score_min"] = str(targets["score_min"])
+    scar_visualizations["layer_top1pct_score_mean"] = str(targets["score_mean"])
+    manifest["summary"] = summary
+    write_json(out_dir / "summary.json", summary)
+    write_json(manifest_path, manifest)
+    print(f"Backfilled shared layer top-1% SCAR visualizations: {out_dir}")
+    return True
+
+
 def main() -> None:
     args = parse_args()
     neurons_root = resolve_path(args.neurons_dir) if args.neurons_dir else path_from_config("neurons_dir")
@@ -209,6 +359,13 @@ def main() -> None:
         if not single_manifest_path.exists():
             raise FileNotFoundError(f"Missing single-type manifest for {subset}: {single_manifest_path}")
         params = expected_params(args, single_manifest=read_json(single_manifest_path), subset=subset)
+        if (
+            not args.overwrite
+            and not args.clean
+            and backfill_layer_top1pct_visualizations(out_dir, viz_dir, single_root, subset, params)
+            and should_skip(out_dir, viz_dir, subset, params, args.overwrite, args.clean)
+        ):
+            continue
         if should_skip(out_dir, viz_dir, subset, params, args.overwrite, args.clean):
             continue
         ensure_dir(out_dir)
@@ -252,8 +409,26 @@ def main() -> None:
         plot_heatmap(ctd_rows, module_dims, heatmap_path)
         scar_min_heatmap_path = viz_dir / f"ctd_scar_min_heatmap_{subset}.png"
         scar_mean_heatmap_path = viz_dir / f"ctd_scar_mean_heatmap_{subset}.png"
+        layer_top1pct_min_path = viz_dir / f"ctd_layer_top1pct_scar_min_heatmap_{subset}.png"
+        layer_top1pct_mean_path = viz_dir / f"ctd_layer_top1pct_scar_mean_heatmap_{subset}.png"
         plot_ctd_scar_heatmap(ctd_rows, scar_min_heatmap_path, "score_min", args.heatmap_top_n)
         plot_ctd_scar_heatmap(ctd_rows, scar_mean_heatmap_path, "score_mean", args.heatmap_top_n)
+        plot_layer_top_shared_score_heatmap(
+            ctd_rows,
+            module_dims,
+            layer_top1pct_min_path,
+            score_field="score_min",
+            score_label="CTD SCAR score_min",
+            title=f"{subset} CTD: top 1% shared SCAR by layer/module (score_min)",
+        )
+        plot_layer_top_shared_score_heatmap(
+            ctd_rows,
+            module_dims,
+            layer_top1pct_mean_path,
+            score_field="score_mean",
+            score_label="CTD SCAR score_mean",
+            title=f"{subset} CTD: top 1% shared SCAR by layer/module (score_mean)",
+        )
 
         summary = {
             "tdn_counts": {task_type: len(sets[task_type]) for task_type in TASK_TYPES},
@@ -266,6 +441,8 @@ def main() -> None:
             "scar_visualizations": {
                 "score_min": str(scar_min_heatmap_path),
                 "score_mean": str(scar_mean_heatmap_path),
+                "layer_top1pct_score_min": str(layer_top1pct_min_path),
+                "layer_top1pct_score_mean": str(layer_top1pct_mean_path),
             },
         }
         write_json(out_dir / "summary.json", summary)
