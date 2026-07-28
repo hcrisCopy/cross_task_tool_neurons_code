@@ -23,9 +23,10 @@
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel/
 ../cross_task_tool_neurons_data/probe_prefill/safety_kernel_union/
 ../cross_task_tool_neurons_data/probe_prefill/precise_shield/
+../cross_task_tool_neurons_data/probe_prefill/precise_shield_union/
 ```
 
-`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。
+`--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。
 
 ## 运行顺序
 
@@ -59,6 +60,12 @@ PreciseShield / PS-CTD 单卡指令：
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method precise_shield --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
 ```
 
+PreciseShield_Union / PS-CTD_Union 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method precise_shield_union --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
+```
+
 ## PP-2 训练共享神经元 Logistic Probe
 
 PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。单跳、多跳会分别训练各自的 probe。
@@ -79,6 +86,12 @@ PreciseShield / PS-CTD 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method precise_shield --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+PreciseShield_Union / PS-CTD_Union 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method precise_shield_union --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 终端打印按论文表格版式：`ours` / `when2tool` 两行对比。single-hop 会额外打印 easy/medium/hard AUROC。
