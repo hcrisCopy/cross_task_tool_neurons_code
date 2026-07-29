@@ -489,7 +489,7 @@ def plot_layer_score(rows: list[dict[str, Any]], out_path: Path, title: str) -> 
 
 
 def plot_layer_top_score_heatmap(rows: list[dict[str, Any]], module_meta: list[dict[str, Any]], out_path: Path) -> None:
-    groups = module_groups(module_meta, rows)
+    groups = module_groups(module_meta)
     dims = {(int(meta["layer"]), str(meta["module"])): int(meta["dim"]) for meta in module_meta}
     row_values: list[list[float]] = []
     row_labels: list[str] = []
