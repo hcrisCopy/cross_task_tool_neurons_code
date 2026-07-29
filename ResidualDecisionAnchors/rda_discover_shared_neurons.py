@@ -29,6 +29,7 @@ METHOD_NAME = "ResidualDecisionAnchors"
 STAGE_VERSION = 1
 CTD_FILENAME = "RDA_CTD_neurons.jsonl"
 TDN_FILENAME = "RDA_TDN_neurons.jsonl"
+LAYER_TOP_SCORE_RATIO = 0.01
 
 
 def parse_args() -> argparse.Namespace:
@@ -289,6 +290,60 @@ def plot_score_heatmap(rows: list[dict[str, Any]], out_path: Path, top_n: int, t
     plt.close(fig)
 
 
+def plot_layer_top_score_heatmap(rows: list[dict[str, Any]], module_meta: list[dict[str, Any]], out_path: Path) -> None:
+    layers = [int(meta["layer"]) for meta in module_meta]
+    dims = {int(meta["layer"]): int(meta["dim"]) for meta in module_meta}
+    row_values: list[list[float]] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for layer in layers:
+        candidates = [float(row["score"]) for row in rows if int(row["layer"]) == layer]
+        dim = max(dims.get(layer, len(candidates)), 1)
+        k = max(1, int(dim * LAYER_TOP_SCORE_RATIO))
+        candidates.sort(reverse=True)
+        values = candidates[: min(k, len(candidates))]
+        row_values.append(values)
+        row_labels.append(f"L{layer}.residual_state")
+        max_cols = max(max_cols, k, len(values))
+
+    if not row_values or not any(row_values) or max_cols <= 0:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.set_title("RDA-CTD top 1% score by layer")
+        ax.text(0.5, 0.5, "No neurons", ha="center", va="center")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.tight_layout()
+        ensure_dir(out_path.parent)
+        fig.savefig(out_path, dpi=180)
+        plt.close(fig)
+        return
+
+    matrix = [[float("nan") for _ in range(max_cols)] for _ in row_values]
+    for row_idx, values in enumerate(row_values):
+        for col_idx, value in enumerate(values):
+            matrix[row_idx][col_idx] = value
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.12))
+    fig_height = max(6, len(row_labels) * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap)
+    ax.set_title("RDA-CTD: top 1% shared score by layer")
+    ax.set_xlabel("Neuron rank within top 1% of each residual layer")
+    ax.set_ylabel("Hidden layer")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label="signed ABC consensus score")
+    fig.tight_layout()
+    ensure_dir(out_path.parent)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def expected_params(args: argparse.Namespace, subset: str, activation_dir: Path, activation_manifest: dict[str, Any]) -> dict[str, Any]:
     return {
         "stage": "rda_05_signed_consensus_shared_neuron_discovery",
@@ -302,6 +357,7 @@ def expected_params(args: argparse.Namespace, subset: str, activation_dir: Path,
         "min_neurons_per_layer": args.min_neurons_per_layer,
         "min_class_count": args.min_class_count,
         "epsilon": args.epsilon,
+        "layer_top_score_ratio": LAYER_TOP_SCORE_RATIO,
         "score_definition": "score=max(min(z_A,z_B,z_C), min(-z_A,-z_B,-z_C)) over residual_state dimensions",
     }
 
@@ -310,7 +366,11 @@ def should_skip(out_dir: Path, single_subset_root: Path, viz_dir: Path, subset: 
     if clean:
         clean_directory(out_dir, data_root())
         clean_directory(single_subset_root, data_root())
-        for path in [viz_dir / f"rda_ctd_layer_counts_{subset}.png", viz_dir / f"rda_ctd_score_heatmap_{subset}.png"]:
+        for path in [
+            viz_dir / f"rda_ctd_layer_counts_{subset}.png",
+            viz_dir / f"rda_ctd_score_heatmap_{subset}.png",
+            viz_dir / f"rda_ctd_layer_top1pct_score_heatmap_{subset}.png",
+        ]:
             if path.exists():
                 path.unlink()
         return False
@@ -321,6 +381,9 @@ def should_skip(out_dir: Path, single_subset_root: Path, viz_dir: Path, subset: 
         out_dir / "top_neurons.csv",
         single_subset_root / "module_meta.json",
         single_subset_root / "manifest.json",
+        viz_dir / f"rda_ctd_layer_counts_{subset}.png",
+        viz_dir / f"rda_ctd_score_heatmap_{subset}.png",
+        viz_dir / f"rda_ctd_layer_top1pct_score_heatmap_{subset}.png",
     ]
     if overwrite or not all(path.exists() for path in expected):
         return False
@@ -391,8 +454,10 @@ def run_subset(args: argparse.Namespace, subset: str, activation_root: Path, neu
         write_json(type_dir / "summary.json", {"model_alias": args.model_alias, "subset": subset, "task_type": task_type, "selected_neurons": len(type_rows)})
     count_path = viz_dir / f"rda_ctd_layer_counts_{subset}.png"
     score_path = viz_dir / f"rda_ctd_score_heatmap_{subset}.png"
+    layer_top1pct_path = viz_dir / f"rda_ctd_layer_top1pct_score_heatmap_{subset}.png"
     plot_layer_counts(rows, count_path, f"{subset} RDA-CTD selected residual dimensions")
     plot_score_heatmap(rows, score_path, args.heatmap_top_n, f"{subset} RDA-CTD signed ABC consensus")
+    plot_layer_top_score_heatmap(rows, module_meta, layer_top1pct_path)
     summary = {
         "model_alias": args.model_alias,
         "subset": subset,
@@ -408,7 +473,11 @@ def run_subset(args: argparse.Namespace, subset: str, activation_root: Path, neu
             "max": max((float(row["score"]) for row in rows), default=0.0),
         },
         "top_layers": Counter(int(row["layer"]) for row in rows).most_common(10),
-        "visualizations": {"layer_counts": str(count_path), "score_heatmap": str(score_path)},
+        "visualizations": {
+            "layer_counts": str(count_path),
+            "score_heatmap": str(score_path),
+            "layer_top1pct_score_heatmap": str(layer_top1pct_path),
+        },
     }
     write_json(out_dir / "summary.json", summary)
     write_json(out_dir / "manifest.json", {"params": params, "summary": summary})

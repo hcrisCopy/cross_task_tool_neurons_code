@@ -50,7 +50,7 @@ TKN-5 会写出 `density_heatmap`、全局 top score heatmap、逐层 mean score
 python ToolKnowledgeNeurons/tkn_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/activations --neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/visualizations --subset all --selection top_ratio --top-ratio 0.10 --min-neurons-per-layer 64 --min-shared-score 0.0 --min-pairs 2 --max-pairs 0 --epsilon 1.0e-4 --floor-ratio 0.05 --heatmap-top-n 300 --device cuda:0 --refine-with-linear-probe --refine-keep-ratio 0.50 --refine-reg 10000 --refine-max-iter 2000
 ```
 
-不再提供 `--top-ratio` 超过 `0.10` 的 TKN 诊断指令，避免正式实验误用过宽的神经元集合。
+正式实验命令保持 `--top-ratio 0.10`；如需诊断，可以在独立输出目录下自行调整参数，避免覆盖正式产物。
 
 ## 主要输出
 

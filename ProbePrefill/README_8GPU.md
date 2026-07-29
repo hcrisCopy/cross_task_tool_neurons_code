@@ -50,7 +50,7 @@ PP-5 是因果验证，若本轮只交 Probe&Prefill 主结果，可先跑到 PP
 
 ## ToolDecisionAnchors 前置阶段
 
-该方法复用根目录 `README.md` 的阶段 1-3。TDA-5 只使用 `train` split 发现神经元，`test` activation 只供 PP-1 构建后续 probe/test 特征。TDA 的神经元定义是 Safety Kernel 风格的 FFN output `(layer, module, index)`，分数是 A/B/C 三类任务方向一致的 signed consensus score。
+该方法复用根目录 `README.md` 的阶段 1-3。TDA-5 只使用 `train` split 发现神经元，`test` activation 只供 PP-1 构建后续 probe/test 特征。TDA 的神经元定义是 Safety Kernel 风格的 FFN output `(layer, module, index)`，按 A/B/C 三类任务方向一致性计算 shared score，正式命令每个 layer/module 取 top 10%。
 
 TDA-4 单卡指令：
 ```text
@@ -59,14 +59,14 @@ python ToolDecisionAnchors/tda_extract_ffn_activations.py --model-alias qwen3-4b
 
 TDA-5 单卡指令：
 ```text
-python ToolDecisionAnchors/tda_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/tool_decision_anchors/activations --neurons-dir ../cross_task_tool_neurons_data/tool_decision_anchors/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_decision_anchors/visualizations --subset all --modules gate_proj,up_proj --top-ratio 0.70 --min-neurons-per-module 1 --min-class-count 2 --heatmap-top-n 300 --epsilon 1.0e-6 --device cuda:0
+python ToolDecisionAnchors/tda_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/tool_decision_anchors/activations --neurons-dir ../cross_task_tool_neurons_data/tool_decision_anchors/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_decision_anchors/visualizations --subset all --modules gate_proj,up_proj --top-ratio 0.10 --min-neurons-per-module 1 --min-class-count 2 --heatmap-top-n 300 --epsilon 1.0e-6 --device cuda:0
 ```
 
-TDA-5 打印每个 subset 的 `TDA_CTD` 数量、score mean/max、modules。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TDA-5 命令末尾追加 `--clean`。
+TDA-5 打印每个 subset 的 `TDA_CTD` 数量、score mean/max、modules，并写出 density、全局 top score、逐层 mean score、逐层 top 1% score 热力图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TDA-5 命令末尾追加 `--clean`。
 
 ## ResidualDecisionAnchors 前置阶段
 
-该方法复用根目录 `README.md` 的阶段 1-3。RDA-4 对齐 When2Tool 的 hidden-state 抽取设置：current prompt、no reasoning、最后输入 token、全层 `outputs.hidden_states`。RDA-5 只使用 `train` split 发现 residual-state 维度神经元，`test` activation 只供 PP-1 构建后续 probe/test 特征。
+该方法复用根目录 `README.md` 的阶段 1-3。RDA-4 对齐 When2Tool 的 hidden-state 抽取设置：current prompt、no reasoning、最后输入 token、全层 `outputs.hidden_states`。RDA-5 只使用 `train` split 发现 residual-state 维度神经元，正式命令每层取 top 10%；`test` activation 只供 PP-1 构建后续 probe/test 特征。
 
 RDA-4 单卡指令：
 ```text
@@ -75,10 +75,10 @@ python ResidualDecisionAnchors/rda_extract_hidden_activations.py --model-alias q
 
 RDA-5 单卡指令：
 ```text
-python ResidualDecisionAnchors/rda_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/residual_decision_anchors/activations --neurons-dir ../cross_task_tool_neurons_data/residual_decision_anchors/neurons --visualizations-dir ../cross_task_tool_neurons_data/residual_decision_anchors/visualizations --subset all --top-ratio 0.80 --min-neurons-per-layer 1 --min-class-count 2 --heatmap-top-n 300 --epsilon 1.0e-6 --device cuda:0
+python ResidualDecisionAnchors/rda_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/residual_decision_anchors/activations --neurons-dir ../cross_task_tool_neurons_data/residual_decision_anchors/neurons --visualizations-dir ../cross_task_tool_neurons_data/residual_decision_anchors/visualizations --subset all --top-ratio 0.10 --min-neurons-per-layer 1 --min-class-count 2 --heatmap-top-n 300 --epsilon 1.0e-6 --device cuda:0
 ```
 
-RDA-5 打印每个 subset 的 `RDA_CTD` 数量、score mean/max。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 RDA-5 命令末尾追加 `--clean`。
+RDA-5 打印每个 subset 的 `RDA_CTD` 数量、score mean/max，并写出逐层数量图、全局 top score 热力图和逐层 top 1% score 热力图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 RDA-5 命令末尾追加 `--clean`。
 
 ## ToolKnowledgeNeurons 前置阶段
 

@@ -30,6 +30,7 @@ METHOD_NAME = "ToolDecisionAnchors"
 TDN_FILENAME = "TDA_TDN_neurons.jsonl"
 CTD_FILENAME = "TDA_CTD_neurons.jsonl"
 MODULE_ORDER = ["gate_proj", "up_proj", "down_proj"]
+LAYER_TOP_SCORE_RATIO = 0.01
 
 
 def parse_args() -> argparse.Namespace:
@@ -487,6 +488,52 @@ def plot_layer_score(rows: list[dict[str, Any]], out_path: Path, title: str) -> 
     plt.close(fig)
 
 
+def plot_layer_top_score_heatmap(rows: list[dict[str, Any]], module_meta: list[dict[str, Any]], out_path: Path) -> None:
+    groups = module_groups(module_meta, rows)
+    dims = {(int(meta["layer"]), str(meta["module"])): int(meta["dim"]) for meta in module_meta}
+    row_values: list[list[float]] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for layer, module in groups:
+        candidates = [float(row["score"]) for row in rows if int(row["layer"]) == layer and str(row["module"]) == module]
+        dim = max(dims.get((layer, module), len(candidates)), 1)
+        k = max(1, int(dim * LAYER_TOP_SCORE_RATIO))
+        candidates.sort(reverse=True)
+        values = candidates[: min(k, len(candidates))]
+        row_values.append(values)
+        row_labels.append(f"L{layer}.{module}")
+        max_cols = max(max_cols, k, len(values))
+
+    if not row_values or not any(row_values) or max_cols <= 0:
+        write_empty_plot(out_path, "TDA-CTD top 1% score by layer/module")
+        return
+
+    matrix = [[float("nan") for _ in range(max_cols)] for _ in row_values]
+    for row_idx, values in enumerate(row_values):
+        for col_idx, value in enumerate(values):
+            matrix[row_idx][col_idx] = value
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap)
+    ax.set_title("TDA-CTD: top 1% shared score by layer/module")
+    ax.set_xlabel("Neuron rank within top 1% of each layer/module")
+    ax.set_ylabel("Layer / FFN module")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label="signed ABC consensus score")
+    fig.tight_layout()
+    ensure_dir(out_path.parent)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def expected_params(
     args: argparse.Namespace,
     *,
@@ -512,6 +559,7 @@ def expected_params(
         "min_neurons_per_module": args.min_neurons_per_module,
         "min_class_count": args.min_class_count,
         "epsilon": args.epsilon,
+        "layer_top_score_ratio": LAYER_TOP_SCORE_RATIO,
         "score_definition": (
             "For each task type c in A/B/C, z_c = zscore((mean(tool=1)-mean(tool=0))/"
             "sqrt(var(tool=1)+var(tool=0)+epsilon)) within each FFN module. "
@@ -526,6 +574,7 @@ def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"tda_ctd_density_heatmap_{subset}.png",
         viz_dir / f"tda_ctd_score_heatmap_{subset}.png",
         viz_dir / f"tda_ctd_layer_score_heatmap_{subset}.png",
+        viz_dir / f"tda_ctd_layer_top1pct_score_heatmap_{subset}.png",
     ]
 
 
@@ -706,9 +755,11 @@ def run_subset(
     density_path = viz_dir / f"tda_ctd_density_heatmap_{subset}.png"
     score_path = viz_dir / f"tda_ctd_score_heatmap_{subset}.png"
     layer_score_path = viz_dir / f"tda_ctd_layer_score_heatmap_{subset}.png"
+    layer_top1pct_path = viz_dir / f"tda_ctd_layer_top1pct_score_heatmap_{subset}.png"
     plot_density(rows, module_meta, density_path)
     plot_score_heatmap(rows, score_path, args.heatmap_top_n, f"{subset} TDA-CTD signed ABC consensus")
     plot_layer_score(rows, layer_score_path, f"{subset} TDA-CTD mean selected score")
+    plot_layer_top_score_heatmap(rows, module_meta, layer_top1pct_path)
 
     torch.save(
         {
@@ -750,6 +801,7 @@ def run_subset(
             "density_heatmap": str(density_path),
             "score_heatmap": str(score_path),
             "layer_score_heatmap": str(layer_score_path),
+            "layer_top1pct_score_heatmap": str(layer_top1pct_path),
         },
     }
     if not rows:
