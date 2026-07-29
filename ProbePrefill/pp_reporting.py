@@ -36,6 +36,22 @@ WHEN2TOOL_PROBE_REFERENCE = {
 }
 
 
+WHEN2TOOL_PROBE_REPRO_REFERENCE = {
+    "single_hop": {
+        "qwen3-4b-instruct": {
+            "auroc": 0.9455,
+            "accuracy": 0.8804,
+            "easy_auroc": 0.9349,
+            "medium_auroc": 0.8984,
+            "hard_auroc": 0.9466,
+        },
+    },
+    "multi_hop": {
+        "qwen3-4b-instruct": {"auroc": 0.9257, "accuracy": 0.8489},
+    },
+}
+
+
 _SINGLE_BASE = {
     "qwen3-1.7b": {"accuracy_pct": 88.2, "total_tool_calls": 2709},
     "qwen3-4b-instruct": {"accuracy_pct": 89.2, "total_tool_calls": 2118},
@@ -288,6 +304,10 @@ def paper_probe_reference(model_alias: str, subset: str) -> dict[str, Any] | Non
     return WHEN2TOOL_PROBE_REFERENCE.get(subset, {}).get(model_alias)
 
 
+def repro_probe_reference(model_alias: str, subset: str) -> dict[str, Any] | None:
+    return WHEN2TOOL_PROBE_REPRO_REFERENCE.get(subset, {}).get(model_alias)
+
+
 def paper_eval_reference(model_alias: str, subset: str, threshold: float, prefill_mode: str) -> dict[str, Any] | None:
     block = WHEN2TOOL_EVAL_REFERENCE.get(subset)
     if not block:
@@ -429,6 +449,7 @@ def write_probe_training_report(
     model_alias = str(results.get("model_alias", ""))
     subset = str(results.get("subset", ""))
     ref = paper_probe_reference(model_alias, subset)
+    repro_ref = repro_probe_reference(model_alias, subset)
     overall = results.get("test", {}).get("overall", {})
     lines = [
         f"# Probe report: {model_alias}/{subset}",
@@ -459,6 +480,20 @@ def write_probe_training_report(
             )
     else:
         lines.append("- No exact paper reference stored for this model/subset.")
+    if repro_ref:
+        lines.extend(
+            [
+                "",
+                "## When2Tool reproduction reference",
+                "",
+                "- Reproduction values are from the user-provided qwen3-4b-instruct benchmark screenshots.",
+                f"- Repro AUROC / Acc: {_fmt_float(repro_ref.get('auroc'))} / {_fmt_pct(repro_ref.get('accuracy'))}",
+            ]
+        )
+        if subset == "single_hop":
+            lines.append(
+                f"- Repro AUROC by difficulty: easy={_fmt_float(repro_ref.get('easy_auroc'))}, medium={_fmt_float(repro_ref.get('medium_auroc'))}, hard={_fmt_float(repro_ref.get('hard_auroc'))}"
+            )
     lines.extend(["", metric_glossary_markdown(), ""])
     (out_dir / "probe_report.md").write_text("\n".join(lines), encoding="utf-8")
     print_probe_training_summary(results, ref)
@@ -469,38 +504,53 @@ def print_probe_training_summary(results: dict[str, Any], ref: dict[str, Any] | 
     subset = results.get("subset")
     overall = results.get("test", {}).get("overall", {})
     feature_set = str(results.get("feature_set") or "CTD")
+    repro_ref = repro_probe_reference(str(model_alias), str(subset))
     print(f"\n=== PP-2 探针训练指标（{feature_set} 神经元特征）===")
     print(
         f"条件: model={model_alias} ({_display_name(str(model_alias))}), subset={subset}, "
         f"tau={results.get('threshold')}, reg={results.get('reg')}, max_iter={results.get('max_iter', 'unknown')}, "
         f"feature_dim={results.get('feature_dim')}"
     )
-    print(f"对齐论文: {paper_probe_table_name(str(subset))}；ours={feature_set} 神经元 probe，when2tool=hidden-state probe。")
+    print(
+        f"对齐论文: {paper_probe_table_name(str(subset))}；"
+        f"ours={feature_set} 神经元 probe，when2tool论文/复现=hidden-state probe。"
+    )
     _print_paper_metric_notes(["AUROC", "Accuracy"])
     headers = ["source", "AUROC", "Accuracy"]
     ours_row = ["ours", _fmt_float(overall.get("auroc")), _fmt_float(overall.get("accuracy"))]
-    paper_row = ["when2tool", _fmt_float(ref.get("auroc")), _fmt_float(ref.get("accuracy"))] if ref else None
-    _print_table(headers, [ours_row] + ([paper_row] if paper_row else []))
+    rows = [ours_row]
+    if ref:
+        rows.append(["when2tool论文", _fmt_float(ref.get("auroc")), _fmt_float(ref.get("accuracy"))])
+    if repro_ref:
+        rows.append(["when2tool复现", _fmt_float(repro_ref.get("auroc")), _fmt_float(repro_ref.get("accuracy"))])
+    _print_table(headers, rows)
     if str(subset) == "single_hop" and ref:
         by_diff = results.get("test", {}).get("by_difficulty", {})
-        diff_headers = ["source", "easy AUROC", "medium AUROC", "hard AUROC"]
-        _print_table(
-            diff_headers,
+        diff_rows = [
             [
-                [
-                    "ours",
-                    _value_or_missing(by_diff.get("easy", {}).get("auroc")),
-                    _value_or_missing(by_diff.get("medium", {}).get("auroc")),
-                    _value_or_missing(by_diff.get("hard", {}).get("auroc")),
-                ],
-                [
-                    "when2tool",
-                    _fmt_float(ref.get("easy_auroc")),
-                    _fmt_float(ref.get("medium_auroc")),
-                    _fmt_float(ref.get("hard_auroc")),
-                ],
+                "ours",
+                _value_or_missing(by_diff.get("easy", {}).get("auroc")),
+                _value_or_missing(by_diff.get("medium", {}).get("auroc")),
+                _value_or_missing(by_diff.get("hard", {}).get("auroc")),
             ],
-        )
+            [
+                "when2tool论文",
+                _fmt_float(ref.get("easy_auroc")),
+                _fmt_float(ref.get("medium_auroc")),
+                _fmt_float(ref.get("hard_auroc")),
+            ],
+        ]
+        if repro_ref:
+            diff_rows.append(
+                [
+                    "when2tool复现",
+                    _fmt_float(repro_ref.get("easy_auroc")),
+                    _fmt_float(repro_ref.get("medium_auroc")),
+                    _fmt_float(repro_ref.get("hard_auroc")),
+                ]
+            )
+        diff_headers = ["source", "easy AUROC", "medium AUROC", "hard AUROC"]
+        _print_table(diff_headers, diff_rows)
     print(
         "保存但不打印: Precision/Recall/F1、confusion matrix、按 task/env/difficulty 的完整分组、"
         "probe_report.md、probe_metrics_table.csv、probe_roc_curve.png、probe_probability_hist.png"

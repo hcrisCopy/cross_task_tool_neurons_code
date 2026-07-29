@@ -278,7 +278,7 @@ ToolKnowledgeNeurons / TKN_CTD 单卡指令：
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
-终端打印按论文表格版式：`ours` / `when2tool` 两行对比。single-hop 会额外打印 easy/medium/hard AUROC。
+终端打印按论文表格版式：`ours` / `when2tool论文` / `when2tool复现` 对比。single-hop 会额外打印 easy/medium/hard AUROC；复现值目前来自 qwen3-4b-instruct 截图结果。
 
 ## PP-3 Probe&Prefill 评测（八卡）
 

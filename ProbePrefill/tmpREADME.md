@@ -107,7 +107,7 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-me
 
 关键点：
 - 终端只打印论文表格指标：`AUROC`、`Accuracy`；single-hop 额外打印 easy/medium/hard AUROC。
-- 对比格式固定是两行：`ours` 是 CTD 神经元 probe，`when2tool` 是论文 hidden-state probe。
+- 对比格式固定是：`ours` 是 CTD 神经元 probe，`when2tool论文` 是论文 hidden-state probe，`when2tool复现` 是用户复现 hidden-state probe。
 - Precision/Recall/F1、confusion matrix 和完整分组只保存到 `probe_metrics_table.csv`、`probe_report.md`。
 - 训练日志会打印 `reg/C/max_iter/threshold`。`threshold` 是报告和后续决策阈值，训练本身仍是同一个 logistic probe。
 - `threshold` 只影响二分类报告和后续 prefill 决策，不会反过来训练 probe。
