@@ -31,12 +31,14 @@
 ../cross_task_tool_neurons_data/probe_prefill/tool_decision_anchors/
 ../cross_task_tool_neurons_data/probe_prefill/residual_decision_anchors/
 ../cross_task_tool_neurons_data/probe_prefill/tool_knowledge_neurons/
+../cross_task_tool_neurons_data/probe_prefill/tool_routing_neurons/
 ```
 
 `--probe-method safety_kernel` 读取已有 Safety Kernel/CTD 上游产物；如果旧版 ProbePrefill 产物还在根目录，首次运行会非破坏式复制到 `safety_kernel/` 后继续按 manifest 跳过。`--probe-method safety_kernel_union` 读取 `SafetyKernel_Union` 阶段 6 产生的 `CTD_Union`。`--probe-method safety_kernel_noabc` 读取 `SafetyKernel_noABC` 阶段 SKNA-4 激活和 SKNA-5 产生的 `SK_noABC_TDN`。`--probe-method safety_kernel_deepfake` 读取 `SafetyKernel_Deepfake` 阶段 SKD-4 激活和 SKD-6 产生的 `SKD_CTD`。`--probe-method precise_shield` 读取 PreciseShield 的 PS-4/5/6 产物。`--probe-method precise_shield_union` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_Union` 阶段 6 产生的 `PS_CTD_Union`。`--probe-method precise_shield_noabc` 读取 PreciseShield 阶段 4 激活和 `PreciseShield_noABC` 阶段 PSNA-5 产生的 `PS_noABC_TDN`。`--probe-method precise_shield_deepfake` 读取 `PreciseShield_Deepfake` 阶段 PSDF-4 激活和 PSDF-6 产生的 `PSDF_CTD`。
 `--probe-method tool_decision_anchors` 读取 `ToolDecisionAnchors` 阶段 TDA-4 激活和 TDA-5 产生的 `TDA_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method residual_decision_anchors` 读取 `ResidualDecisionAnchors` 阶段 RDA-4 residual hidden activation 和 RDA-5 产生的 `RDA_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method tool_knowledge_neurons` 读取 `ToolKnowledgeNeurons` 阶段 TKN-4 FFN intermediate activation 和 TKN-5 产生的 `TKN_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
+`--probe-method tool_routing_neurons` 读取 `ToolRoutingNeurons` 阶段 TRN-4 attention Q/K/V output、O input activation 和 TRN-5 产生的 `TRN_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 
 ## 运行顺序
 
@@ -95,6 +97,22 @@ python ToolKnowledgeNeurons/tkn_discover_shared_neurons.py --model-alias qwen3-4
 ```
 
 TKN-5 打印每个 subset 的 `TKN_CTD` 数量、score mean/max、是否使用 down_proj norm，并写出 density、全局 top score、逐层 mean score、逐层 top 1% score 四类热力图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TKN-5 命令末尾追加 `--clean`。
+
+## ToolRoutingNeurons 前置阶段
+
+该方法复用根目录 `README.md` 的阶段 1-3。TRN 的神经元定义采用 Fei Shen 大模型工作中使用过的 attention projection row/column routing coordinate：`q_proj/k_proj/v_proj` 输出坐标和 `o_proj` 输入坐标，即 `(layer, attn_q|attn_k|attn_v|attn_o_in, index)`。TRN-5 只使用 `train` split，按 A/B/C 分别构造 `tool_necessary=1` 与 `tool_necessary=0` 的确定性配对；每个 task type 在每层每个 attention module 内先取 top 10%，再取严格 A/B/C 交集，并用方向一致的 paired-shift shared score 排序。`test` activation 只供 PP-1 构建后续 probe/test 特征。
+
+TRN-4 单卡指令：
+```text
+python ToolRoutingNeurons/trn_extract_attention_activations.py --model-alias qwen3-4b-instruct --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --activations-dir ../cross_task_tool_neurons_data/tool_routing_neurons/activations --when2tool-repo third_party/when2tool --subset all --split all --gpus 0 --batch-size 1 --torch-dtype bfloat16 --save-dtype float32 --device-map auto --max-samples 0
+```
+
+TRN-5 单卡指令：
+```text
+python ToolRoutingNeurons/trn_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/tool_routing_neurons/activations --neurons-dir ../cross_task_tool_neurons_data/tool_routing_neurons/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_routing_neurons/visualizations --subset all --modules attn_q,attn_k,attn_v,attn_o_in --type-top-ratio 0.10 --min-neurons-per-module 1 --min-shared-score 0.0 --min-consensus-z 0.0 --min-pairs 2 --max-pairs 0 --epsilon 1.0e-4 --floor-ratio 0.05 --support-power 0.5 --heatmap-top-n 300 --device cuda:0
+```
+
+TRN-5 打印每个 subset 的 `TRN_CTD` 数量、score mean/max、是否使用 projection norm，并写出 density、全局 top score、逐层 mean score、逐层 top 1% score 四类热力图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TRN-5 命令末尾追加 `--clean`。
 
 ## SafetyKernel_Deepfake 前置阶段
 
@@ -208,6 +226,12 @@ ToolKnowledgeNeurons / TKN_CTD 单卡指令：
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
 ```
 
+ToolRoutingNeurons / TRN_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method tool_routing_neurons --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
+```
+
 ## PP-2 训练共享神经元 Logistic Probe
 
 PP-2 只用 train 特征训练 probe；test 只用于报告 AUROC/Accuracy，不参与训练。单跳、多跳会分别训练各自的 probe。
@@ -276,6 +300,12 @@ ToolKnowledgeNeurons / TKN_CTD 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+ToolRoutingNeurons / TRN_CTD 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tool_routing_neurons --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 终端打印按论文表格版式：`ours` / `when2tool论文` / `when2tool复现` 对比。single-hop 会额外打印 easy/medium/hard AUROC；复现值目前来自 qwen3-4b-instruct 截图结果。
