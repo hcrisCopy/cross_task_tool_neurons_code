@@ -8,6 +8,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMMON_DIR = REPO_ROOT / "code" / "00_common"
 PRECISE_DIR = REPO_ROOT / "PreciseShield"
@@ -86,6 +88,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable PreciseShield-style down_proj column norm weighting even when norms are in the activation payload.",
     )
+    parser.add_argument(
+        "--refine-with-linear-probe",
+        action="store_true",
+        help="Use a train-only temporary linear probe weight as a DNA-style scoring factor before writing TKN_CTD.",
+    )
+    parser.add_argument(
+        "--refine-keep-ratio",
+        type=float,
+        default=0.50,
+        help="When --refine-with-linear-probe is enabled, keep this global fraction of the broad TKN candidates.",
+    )
+    parser.add_argument(
+        "--refine-top-k",
+        type=int,
+        default=0,
+        help="When >0, overrides --refine-keep-ratio with an absolute number of neurons to keep per subset.",
+    )
+    parser.add_argument("--refine-reg", type=float, default=10000.0)
+    parser.add_argument("--refine-max-iter", type=int, default=2000)
     parser.add_argument("--heatmap-top-n", type=int, default=300)
     parser.add_argument("--device", default="auto", help="Tensor statistics device: auto, cpu, cuda, or cuda:<index>.")
     parser.add_argument("--clean", action="store_true")
@@ -486,6 +507,143 @@ def selected_rows(
     return rows, layer_rows, consensus_by_key
 
 
+def build_candidate_feature_matrix(
+    activations: dict[str, torch.Tensor],
+    rows: list[dict[str, Any]],
+) -> torch.Tensor:
+    if not rows:
+        raise ValueError("Cannot refine an empty TKN candidate set")
+    feature_columns: list[torch.Tensor | None] = [None] * len(rows)
+    groups: dict[str, list[tuple[int, int]]] = {}
+    for position, row in enumerate(rows):
+        groups.setdefault(str(row["module_key"]), []).append((position, int(row["index"])))
+    for module_key, positions_and_indices in groups.items():
+        positions = [pos for pos, _idx in positions_and_indices]
+        indices = torch.tensor([idx for _pos, idx in positions_and_indices], dtype=torch.long)
+        block = activations[module_key].index_select(1, indices).float().cpu()
+        for local_col, global_pos in enumerate(positions):
+            feature_columns[global_pos] = block[:, local_col]
+    if any(column is None for column in feature_columns):
+        raise RuntimeError("Internal error while building TKN refine feature columns")
+    return torch.stack([column for column in feature_columns if column is not None], dim=1).contiguous()
+
+
+def refine_rows_with_linear_probe(
+    *,
+    rows: list[dict[str, Any]],
+    activations: dict[str, torch.Tensor],
+    meta_rows: list[dict[str, Any]],
+    keep_ratio: float,
+    top_k: int,
+    reg: float,
+    max_iter: int,
+    subset: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not 0 < keep_ratio <= 1:
+        raise ValueError("--refine-keep-ratio must be in (0, 1]")
+    if reg <= 0:
+        raise ValueError("--refine-reg must be positive")
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+
+    X = build_candidate_feature_matrix(activations, rows)
+    y = np.array([int(row["tool_necessary"]) for row in meta_rows], dtype=np.int64)
+    if len(set(y.tolist())) < 2:
+        raise ValueError(f"{subset}: refine labels contain only one class")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X.numpy())
+    clf = LogisticRegression(C=1.0 / reg, solver="lbfgs", max_iter=max_iter, random_state=42)
+    clf.fit(X_scaled, y)
+    coef_abs = np.abs(clf.coef_[0])
+    train_prob = clf.predict_proba(X_scaled)[:, 1]
+    try:
+        from sklearn.metrics import accuracy_score, roc_auc_score
+
+        train_auroc = float(roc_auc_score(y, train_prob))
+        train_acc = float(accuracy_score(y, (train_prob >= 0.5).astype(np.int64)))
+    except Exception:
+        train_auroc = 0.0
+        train_acc = 0.0
+    for position, row in enumerate(rows):
+        coef = float(clf.coef_[0][position])
+        coef_mag = float(coef_abs[position])
+        row["initial_rank"] = int(row.get("rank", position + 1))
+        row["initial_tkn_score"] = float(row["score"])
+        row["refine_linear_coef"] = coef
+        row["refine_abs_coef"] = coef_mag
+        row["refine_score"] = coef_mag * max(float(row["score"]), 0.0)
+        row["score"] = row["refine_score"]
+        row["tkn_refined_score"] = row["refine_score"]
+        row["selection"] = f"{row.get('selection', 'top_ratio')}+linear_probe_refine"
+    keep_count = int(top_k) if top_k > 0 else int(math.ceil(len(rows) * keep_ratio))
+    keep_count = max(1, min(len(rows), keep_count))
+    rows.sort(
+        key=lambda item: (
+            -float(item["refine_score"]),
+            -float(item["refine_abs_coef"]),
+            -float(item["initial_tkn_score"]),
+            int(item["layer"]),
+            int(item["index"]),
+        )
+    )
+    kept = [dict(row) for row in rows[:keep_count]]
+    for rank, row in enumerate(kept, start=1):
+        row["rank"] = rank
+        row["shared_rank"] = rank
+    summary = {
+        "enabled": True,
+        "candidate_neurons": len(rows),
+        "kept_neurons": len(kept),
+        "keep_ratio": keep_ratio,
+        "top_k": top_k,
+        "reg": reg,
+        "C": 1.0 / reg,
+        "max_iter": max_iter,
+        "train_auroc": train_auroc,
+        "train_accuracy": train_acc,
+        "score_definition": "refine_score=abs(train_only_linear_probe_coef)*initial_TKN_score",
+    }
+    return kept, summary
+
+
+def layer_summary_from_rows(
+    *,
+    rows: list[dict[str, Any]],
+    module_meta: list[dict[str, Any]],
+    model_alias: str,
+    subset: str,
+    selection: str,
+    top_ratio: float,
+    min_shared_score: float,
+) -> list[dict[str, Any]]:
+    rows_by_layer: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_layer.setdefault(int(row["layer"]), []).append(row)
+    layer_rows: list[dict[str, Any]] = []
+    for meta in module_meta:
+        layer = int(meta["layer"])
+        selected = rows_by_layer.get(layer, [])
+        scores = [float(row["score"]) for row in selected]
+        layer_rows.append(
+            {
+                "model_alias": model_alias,
+                "subset": subset,
+                "layer": layer,
+                "module": INTERMEDIATE_MODULE,
+                "module_key": str(meta["key"]),
+                "module_dim": int(meta["dim"]),
+                "selected_neurons": len(selected),
+                "selection": selection,
+                "top_ratio": top_ratio,
+                "min_shared_score": min_shared_score,
+                "score_mean": sum(scores) / len(scores) if scores else 0.0,
+                "score_min": min(scores) if scores else 0.0,
+                "score_max": max(scores) if scores else 0.0,
+            }
+        )
+    return layer_rows
+
+
 def rows_by_task_direction(rows: list[dict[str, Any]], task_type: str) -> list[dict[str, Any]]:
     copied: list[dict[str, Any]] = []
     for row in rows:
@@ -647,13 +805,20 @@ def expected_params(
         "min_pairs": args.min_pairs,
         "max_pairs": args.max_pairs,
         "use_down_norm": use_down_norm,
+        "refine_with_linear_probe": args.refine_with_linear_probe,
+        "refine_keep_ratio": args.refine_keep_ratio,
+        "refine_top_k": args.refine_top_k,
+        "refine_reg": args.refine_reg,
+        "refine_max_iter": args.refine_max_iter,
         "score_definition": (
             "For task c in A/B/C, pair tool_necessary=1 and 0 train rows deterministically, "
             "delta=a_tool-a_direct in PreciseShield FFN-intermediate h. "
             "paired_shift=abs(mean(delta))/sqrt(std(delta)^2+floor^2). "
             "signed_shift is optionally weighted by normalized down_proj column norm, then layer-zscored. "
             "shared_score=relu(max(min(z_A,z_B,z_C), min(-z_A,-z_B,-z_C))) * "
-            "sqrt(min(weighted_shift_A,B,C) * mean(weighted_shift_A,B,C))."
+            "sqrt(min(weighted_shift_A,B,C) * mean(weighted_shift_A,B,C)). "
+            "If refine_with_linear_probe is true, broad candidates are reranked by "
+            "abs(train-only logistic probe coefficient) * shared_score."
         ),
         "neuron_identity": "(layer, ffn_intermediate, index)",
     }
@@ -830,6 +995,27 @@ def run_subset(
         min_neurons_per_layer=args.min_neurons_per_layer,
         min_shared_score=args.min_shared_score,
     )
+    refine_summary = {"enabled": False}
+    if args.refine_with_linear_probe:
+        rows, refine_summary = refine_rows_with_linear_probe(
+            rows=rows,
+            activations=activations,
+            meta_rows=meta_rows,
+            keep_ratio=args.refine_keep_ratio,
+            top_k=args.refine_top_k,
+            reg=args.refine_reg,
+            max_iter=args.refine_max_iter,
+            subset=subset,
+        )
+        layer_rows = layer_summary_from_rows(
+            rows=rows,
+            module_meta=module_meta,
+            model_alias=args.model_alias,
+            subset=subset,
+            selection="top_ratio+linear_probe_refine",
+            top_ratio=args.top_ratio,
+            min_shared_score=args.min_shared_score,
+        )
 
     ensure_dir(out_dir)
     ensure_dir(single_root / subset)
@@ -898,6 +1084,7 @@ def run_subset(
         "selection": args.selection,
         "top_ratio": args.top_ratio,
         "use_down_norm": use_down_norm,
+        "refine": refine_summary,
         "class_summaries": class_summaries,
         "score_stats": {
             "min": min((float(row["score"]) for row in rows), default=0.0),
@@ -923,7 +1110,7 @@ def run_subset(
     print(
         f"{subset}: TKN_CTD={len(rows)}, selection={args.selection}, top_ratio={args.top_ratio}, "
         f"score_mean={summary['score_stats']['mean']:.4f}, score_max={summary['score_stats']['max']:.4f}, "
-        f"use_down_norm={use_down_norm}",
+        f"use_down_norm={use_down_norm}, refine={refine_summary.get('enabled', False)}",
         flush=True,
     )
     return summary
@@ -966,6 +1153,7 @@ def main() -> None:
                 "score_mean": summary["score_stats"]["mean"],
                 "score_max": summary["score_stats"]["max"],
                 "use_down_norm": summary["use_down_norm"],
+                "refine_enabled": summary.get("refine", {}).get("enabled", False),
             }
         )
 
@@ -974,7 +1162,17 @@ def main() -> None:
     write_csv_rows(
         model_root / "shared_summary.csv",
         summary_rows,
-        fieldnames=["model_alias", "subset", "method", "neuron_set", "selected_neurons", "score_mean", "score_max", "use_down_norm"],
+        fieldnames=[
+            "model_alias",
+            "subset",
+            "method",
+            "neuron_set",
+            "selected_neurons",
+            "score_mean",
+            "score_max",
+            "use_down_norm",
+            "refine_enabled",
+        ],
     )
     write_json(model_root / "manifest.json", root_manifest)
     print(f"Wrote ToolKnowledgeNeurons shared manifest: {model_root / 'manifest.json'}", flush=True)
