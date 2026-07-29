@@ -50,6 +50,7 @@ PROBE_METHOD_TOOL_DECISION_ANCHORS = "tool_decision_anchors"
 PROBE_METHOD_RESIDUAL_DECISION_ANCHORS = "residual_decision_anchors"
 PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS = "tool_knowledge_neurons"
 PROBE_METHOD_TOOL_ROUTING_NEURONS = "tool_routing_neurons"
+PROBE_METHOD_TOOL_CIRCUIT_NEURONS = "tool_circuit_neurons"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
@@ -63,6 +64,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
     PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
     PROBE_METHOD_TOOL_ROUTING_NEURONS,
+    PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
 )
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
@@ -227,6 +229,22 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "TRN_CTD logistic probe",
         "probe_prefill_method": "ToolRoutingNeurons-TRN_CTD-Probe&Prefill",
     },
+    PROBE_METHOD_TOOL_CIRCUIT_NEURONS: {
+        "namespace": "tool_circuit_neurons",
+        "label": "ToolCircuitNeurons",
+        "shared_label": "TCN_CTD",
+        "single_label": "TCN_TDN",
+        "shared_filename": "TCN_CTD_neurons.jsonl",
+        "single_filename": "TCN_TDN_neurons.jsonl",
+        "feature_set": "TCN_CTD",
+        "feature_description": "ToolCircuitNeurons fused FFN-output, FFN-intermediate, and attention-routing shared neurons",
+        "feature_definition": (
+            "TCN-1 concatenated ProbePrefill features from ToolDecisionAnchors TDA_CTD, "
+            "ToolKnowledgeNeurons TKN_CTD, and ToolRoutingNeurons TRN_CTD, after exact train/test id alignment"
+        ),
+        "train_probe_method": "TCN_CTD logistic probe",
+        "probe_prefill_method": "ToolCircuitNeurons-TCN_CTD-Probe&Prefill",
+    },
 }
 PP_SUBDIRS = {
     "features": "probe_features",
@@ -249,6 +267,7 @@ __all__ = [
     "PROBE_METHOD_SAFETY_KERNEL_DEEPFAKE",
     "PROBE_METHOD_SAFETY_KERNEL_NOABC",
     "PROBE_METHOD_SAFETY_KERNEL_UNION",
+    "PROBE_METHOD_TOOL_CIRCUIT_NEURONS",
     "PROBE_METHOD_TOOL_DECISION_ANCHORS",
     "PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS",
     "PROBE_METHOD_TOOL_ROUTING_NEURONS",
@@ -399,6 +418,11 @@ def normalize_probe_method(value: str | None) -> str:
         "tool_routing_neuron": PROBE_METHOD_TOOL_ROUTING_NEURONS,
         "tool_routing_neurons": PROBE_METHOD_TOOL_ROUTING_NEURONS,
         "trn_ctd": PROBE_METHOD_TOOL_ROUTING_NEURONS,
+        "tcn": PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
+        "toolcircuitneurons": PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
+        "tool_circuit_neuron": PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
+        "tool_circuit_neurons": PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
+        "tcn_ctd": PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
     }
     method = aliases.get(method, method)
     if method not in PROBE_METHOD_CONFIGS:
@@ -468,6 +492,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
         return data_root() / "tool_knowledge_neurons" / "activations"
     if method == PROBE_METHOD_TOOL_ROUTING_NEURONS:
         return data_root() / "tool_routing_neurons" / "activations"
+    if method == PROBE_METHOD_TOOL_CIRCUIT_NEURONS:
+        return data_root() / "tool_circuit_neurons" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -497,6 +523,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "tool_knowledge_neurons" / "neurons"
     if method == PROBE_METHOD_TOOL_ROUTING_NEURONS:
         return data_root() / "tool_routing_neurons" / "neurons"
+    if method == PROBE_METHOD_TOOL_CIRCUIT_NEURONS:
+        return data_root() / "tool_circuit_neurons" / "neurons"
     return path_from_config("neurons_dir")
 
 
@@ -678,6 +706,7 @@ def load_shared_neuron_rows(
             PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
             PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
             PROBE_METHOD_TOOL_ROUTING_NEURONS,
+            PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
         }:
             raise ValueError(
                 f"{cfg['shared_label']} neuron set is empty for {model_alias}/{subset}: {path}. "
