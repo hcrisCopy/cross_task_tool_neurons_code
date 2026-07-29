@@ -34,6 +34,7 @@ STAGE_VERSION = 1
 METHOD_NAME = "ToolKnowledgeNeurons"
 TDN_FILENAME = "TKN_TDN_neurons.jsonl"
 CTD_FILENAME = "TKN_CTD_neurons.jsonl"
+LAYER_TOP_SCORE_RATIO = 0.01
 
 
 def parse_args() -> argparse.Namespace:
@@ -776,6 +777,68 @@ def plot_layer_score(rows: list[dict[str, Any]], module_meta: list[dict[str, Any
     plt.close(fig)
 
 
+def plot_layer_top_score_heatmap(
+    rows: list[dict[str, Any]],
+    module_meta: list[dict[str, Any]],
+    out_path: Path,
+    *,
+    score_field: str,
+    score_label: str,
+    title: str,
+    ratio: float = LAYER_TOP_SCORE_RATIO,
+) -> None:
+    layers = [int(meta["layer"]) for meta in module_meta]
+    if not layers:
+        layers = sorted({int(row["layer"]) for row in rows})
+    dims = {int(meta["layer"]): int(meta["dim"]) for meta in module_meta}
+
+    row_values: list[list[float]] = []
+    row_labels: list[str] = []
+    max_cols = 0
+    for layer in layers:
+        candidates = [
+            float(row[score_field])
+            for row in rows
+            if int(row["layer"]) == layer and row.get(score_field) is not None
+        ]
+        dim = max(dims.get(layer, len(candidates)), 1)
+        k = max(1, int(dim * ratio))
+        candidates.sort(reverse=True)
+        values = candidates[: min(k, len(candidates))]
+        row_values.append(values)
+        row_labels.append(f"L{layer}.{INTERMEDIATE_MODULE}")
+        max_cols = max(max_cols, k, len(values))
+
+    if not row_values or not any(row_values) or max_cols <= 0:
+        write_empty_plot(out_path, title)
+        return
+
+    matrix = [[float("nan") for _ in range(max_cols)] for _ in row_values]
+    for row_idx, values in enumerate(row_values):
+        for col_idx, value in enumerate(values):
+            matrix[row_idx][col_idx] = value
+
+    cmap = plt.get_cmap("plasma").copy()
+    cmap.set_bad("#f3f4f6")
+    fig_width = max(10, min(42, max_cols * 0.018))
+    fig_height = max(6, len(row_labels) * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap)
+    ax.set_title(title)
+    ax.set_xlabel(f"Neuron rank within top {int(ratio * 100)}% of each layer")
+    ax.set_ylabel("Layer / FFN neuron space")
+    ticks = list(range(0, max_cols, max(1, max_cols // 10)))
+    if ticks and ticks[-1] != max_cols - 1:
+        ticks.append(max_cols - 1)
+    ax.set_xticks(ticks, [str(i + 1) for i in ticks], rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)), row_labels)
+    fig.colorbar(im, ax=ax, fraction=0.018, pad=0.02, label=score_label)
+    fig.tight_layout()
+    ensure_dir(out_path.parent)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def expected_params(
     args: argparse.Namespace,
     *,
@@ -810,6 +873,8 @@ def expected_params(
         "refine_top_k": args.refine_top_k,
         "refine_reg": args.refine_reg,
         "refine_max_iter": args.refine_max_iter,
+        "heatmap_top_n": args.heatmap_top_n,
+        "layer_top_score_ratio": LAYER_TOP_SCORE_RATIO,
         "score_definition": (
             "For task c in A/B/C, pair tool_necessary=1 and 0 train rows deterministically, "
             "delta=a_tool-a_direct in PreciseShield FFN-intermediate h. "
@@ -829,6 +894,7 @@ def expected_visualizations(viz_dir: Path, subset: str) -> list[Path]:
         viz_dir / f"tkn_ctd_density_heatmap_{subset}.png",
         viz_dir / f"tkn_ctd_score_heatmap_{subset}.png",
         viz_dir / f"tkn_ctd_layer_score_heatmap_{subset}.png",
+        viz_dir / f"tkn_ctd_layer_top1pct_score_heatmap_{subset}.png",
     ]
 
 
@@ -1050,9 +1116,18 @@ def run_subset(
     density_path = viz_dir / f"tkn_ctd_density_heatmap_{subset}.png"
     score_path = viz_dir / f"tkn_ctd_score_heatmap_{subset}.png"
     layer_score_path = viz_dir / f"tkn_ctd_layer_score_heatmap_{subset}.png"
+    layer_top1pct_path = viz_dir / f"tkn_ctd_layer_top1pct_score_heatmap_{subset}.png"
     plot_density(rows, module_meta, density_path)
     plot_score_heatmap(rows, score_path, args.heatmap_top_n, f"{subset} TKN-CTD paired-shift signed consensus")
     plot_layer_score(rows, module_meta, layer_score_path, f"{subset} TKN-CTD mean selected score")
+    plot_layer_top_score_heatmap(
+        rows,
+        module_meta,
+        layer_top1pct_path,
+        score_field="score",
+        score_label="TKN shared score",
+        title=f"{subset} TKN-CTD: top 1% shared score by layer",
+    )
 
     torch.save(
         {
@@ -1100,6 +1175,7 @@ def run_subset(
             "density_heatmap": str(density_path),
             "score_heatmap": str(score_path),
             "layer_score_heatmap": str(layer_score_path),
+            "layer_top1pct_score_heatmap": str(layer_top1pct_path),
         },
     }
     if not rows:

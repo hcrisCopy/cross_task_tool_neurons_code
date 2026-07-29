@@ -42,6 +42,8 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-me
 
 重复运行会按 manifest 提前跳过。发现旧产物有误时，在对应 TKN-4、TKN-5、PP-1 或 PP-2 命令末尾追加 `--clean`；清理范围限制在本方案输出目录内。
 
+TKN-5 会写出 `density_heatmap`、全局 top score heatmap、逐层 mean score heatmap，以及与 SafetyKernel/PreciseShield 对齐的逐层 top 1% 分数热力图 `tkn_ctd_layer_top1pct_score_heatmap_<subset>.png`。
+
 可选的 DNA 风格临时线性 probe 重排命令：
 
 ```text
@@ -57,5 +59,6 @@ python ToolKnowledgeNeurons/tkn_discover_shared_neurons.py --model-alias qwen3-4
 ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons/<model_alias>/shared_by_subset/<subset>/TKN_CTD_neurons.jsonl
 ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons/<model_alias>/single_type_by_subset/<subset>/<A|B|C>/TKN_TDN_neurons.jsonl
 ../cross_task_tool_neurons_data/tool_knowledge_neurons/visualizations/<model_alias>/shared_by_subset/*.png
+../cross_task_tool_neurons_data/tool_knowledge_neurons/visualizations/<model_alias>/shared_by_subset/tkn_ctd_layer_top1pct_score_heatmap_<subset>.png
 ../cross_task_tool_neurons_data/probe_prefill/tool_knowledge_neurons/
 ```
