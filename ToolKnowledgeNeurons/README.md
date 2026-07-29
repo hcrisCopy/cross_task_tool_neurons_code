@@ -2,7 +2,14 @@
 
 TKN 复用根目录 `README.md` 的阶段 1-3，不重新生成标签数据。它的神经元定义沿用 Fei Shen 相关大模型工作中使用的 FFN intermediate 坐标：每层 MLP `down_proj` 输入处的 `h = act(gate_proj(x)) * up_proj(x)`，即 `ffn_intermediate` 的 `(layer, index)`。
 
-TKN-5 只读 `train` split activation。每个任务类型 A/B/C 内按 `env_name, difficulty, id` 确定性配对 `tool_necessary=1` 与 `tool_necessary=0` 样本，计算 `delta = a_tool - a_direct`。每层分数为：
+共享神经元发现流程：
+
+1. TKN-4 保存 train/test 的 FFN intermediate activation；TKN-5 只读 `train` split 发现神经元。
+2. 在 A/B/C 三类任务内部，按 `env_name, difficulty, id` 确定性配对 `tool_necessary=1` 与 `tool_necessary=0` 样本，得到 `delta = a_tool - a_direct`。
+3. 对同一个神经元分别计算 A/B/C 的 signed shift 分数，并用方向一致性构造共享分数：A/B/C 都 tool-high 或都 direct-high 时 shared consensus 高，方向不一致时分数被压低。
+4. 每层按 `TKN_score` 取 `--top-ratio`，当前正式指令固定为 `0.10`，得到 `TKN_CTD`。当前实现不是先取 A/B/C 三个 top 列表再硬交集，而是用 A/B/C 方向一致性构造共享分数后筛选。
+
+每层分数为：
 
 ```text
 paired_shift = |mean(delta)| / sqrt(std(delta)^2 + floor^2)
