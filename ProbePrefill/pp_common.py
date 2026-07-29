@@ -48,6 +48,7 @@ PROBE_METHOD_PRECISE_SHIELD_NOABC = "precise_shield_noabc"
 PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE = "precise_shield_deepfake"
 PROBE_METHOD_TOOL_DECISION_ANCHORS = "tool_decision_anchors"
 PROBE_METHOD_RESIDUAL_DECISION_ANCHORS = "residual_decision_anchors"
+PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS = "tool_knowledge_neurons"
 SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_SAFETY_KERNEL,
     PROBE_METHOD_SAFETY_KERNEL_UNION,
@@ -59,6 +60,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
     PROBE_METHOD_TOOL_DECISION_ANCHORS,
     PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+    PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
 )
 PROBE_METHOD_CONFIGS = {
     PROBE_METHOD_SAFETY_KERNEL: {
@@ -191,6 +193,22 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "RDA_CTD logistic probe",
         "probe_prefill_method": "ResidualDecisionAnchors-RDA_CTD-Probe&Prefill",
     },
+    PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS: {
+        "namespace": "tool_knowledge_neurons",
+        "label": "ToolKnowledgeNeurons",
+        "shared_label": "TKN_CTD",
+        "single_label": "TKN_TDN",
+        "shared_filename": "TKN_CTD_neurons.jsonl",
+        "single_filename": "TKN_TDN_neurons.jsonl",
+        "feature_set": "TKN_CTD",
+        "feature_description": "ToolKnowledgeNeurons shared FFN intermediate paired-shift signed-consensus neurons",
+        "feature_definition": (
+            "TKN-4 last-input-token FFN intermediate h before down_proj restricted to TKN-5 "
+            "A/B/C direction-consistent paired-shift shared neurons"
+        ),
+        "train_probe_method": "TKN_CTD logistic probe",
+        "probe_prefill_method": "ToolKnowledgeNeurons-TKN_CTD-Probe&Prefill",
+    },
 }
 PP_SUBDIRS = {
     "features": "probe_features",
@@ -214,6 +232,7 @@ __all__ = [
     "PROBE_METHOD_SAFETY_KERNEL_NOABC",
     "PROBE_METHOD_SAFETY_KERNEL_UNION",
     "PROBE_METHOD_TOOL_DECISION_ANCHORS",
+    "PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS",
     "SUPPORTED_PROBE_METHODS",
     "classification_metrics",
     "clean_path",
@@ -351,6 +370,11 @@ def normalize_probe_method(value: str | None) -> str:
         "residual_decision_anchor": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
         "residual_decision_anchors": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
         "rda_ctd": PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+        "tkn": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+        "toolknowledgeneurons": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+        "tool_knowledge_neuron": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+        "tool_knowledge_neurons": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+        "tkn_ctd": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
     }
     method = aliases.get(method, method)
     if method not in PROBE_METHOD_CONFIGS:
@@ -416,6 +440,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
         return data_root() / "tool_decision_anchors" / "activations"
     if method == PROBE_METHOD_RESIDUAL_DECISION_ANCHORS:
         return data_root() / "residual_decision_anchors" / "activations"
+    if method == PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS:
+        return data_root() / "tool_knowledge_neurons" / "activations"
     if method in {PROBE_METHOD_PRECISE_SHIELD, PROBE_METHOD_PRECISE_SHIELD_UNION, PROBE_METHOD_PRECISE_SHIELD_NOABC}:
         return data_root() / "precise_shield" / "activations"
     return path_from_config("activations_dir")
@@ -441,6 +467,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "tool_decision_anchors" / "neurons"
     if method == PROBE_METHOD_RESIDUAL_DECISION_ANCHORS:
         return data_root() / "residual_decision_anchors" / "neurons"
+    if method == PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS:
+        return data_root() / "tool_knowledge_neurons" / "neurons"
     return path_from_config("neurons_dir")
 
 
@@ -620,11 +648,12 @@ def load_shared_neuron_rows(
             PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE,
             PROBE_METHOD_TOOL_DECISION_ANCHORS,
             PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
+            PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
         }:
             raise ValueError(
                 f"{cfg['shared_label']} neuron set is empty for {model_alias}/{subset}: {path}. "
-                f"{cfg['label']} uses the strict A/B/C intersection, so this can happen when "
-                "--top-ratio is too small. Rerun the upstream neuron discovery stage "
+                f"{cfg['label']} uses an A/B/C shared-neuron filter, so this can happen when "
+                "--top-ratio is too small or the shared-score threshold is too strict. Rerun the upstream neuron discovery stage "
                 "with a larger --top-ratio, then rerun the shared-neuron stage before PP-1; "
                 "or run PP-1 with --subset single_hop if you intentionally want to skip multi_hop."
             )
