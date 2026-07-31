@@ -31,6 +31,7 @@
 ../cross_task_tool_neurons_data/probe_prefill/tool_decision_anchors/
 ../cross_task_tool_neurons_data/probe_prefill/residual_decision_anchors/
 ../cross_task_tool_neurons_data/probe_prefill/tool_knowledge_neurons/
+../cross_task_tool_neurons_data/probe_prefill/tkn_activation_gain/
 ../cross_task_tool_neurons_data/probe_prefill/tool_knowledge_pathways/
 ../cross_task_tool_neurons_data/probe_prefill/tool_routing_neurons/
 ../cross_task_tool_neurons_data/probe_prefill/tool_circuit_neurons/
@@ -40,6 +41,7 @@
 `--probe-method tool_decision_anchors` 读取 `ToolDecisionAnchors` 阶段 TDA-4 激活和 TDA-5 产生的 `TDA_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method residual_decision_anchors` 读取 `ResidualDecisionAnchors` 阶段 RDA-4 residual hidden activation 和 RDA-5 产生的 `RDA_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method tool_knowledge_neurons` 读取 `ToolKnowledgeNeurons` 阶段 TKN-4 FFN intermediate activation 和 TKN-5 产生的 `TKN_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
+`--probe-method tkn_activation_gain` 读取 `ToolKnowledgeNeurons/tkn_activation_gain` 直接生成的 `TKN_AG` ProbePrefill 特征；它复用 TKN-4/TKN-5，不重新跑模型，并把 raw activation 变成方向对齐的神经元证据特征，后续 PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method tool_knowledge_pathways` 读取 `ToolKnowledgePathways/tkn_pathways` 阶段 TKP-1 产生的 `TKP_TKN_CTD`；它复用 TKN-4/TKN-5 产物，只在 TKN 神经元空间上做方向路径增强，后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method tool_routing_neurons` 读取 `ToolRoutingNeurons` 阶段 TRN-4 attention Q/K/V output、O input activation 和 TRN-5 产生的 `TRN_CTD`。后续 PP-1/PP-2 的二分类 probe 训练路径保持不变。
 `--probe-method tool_circuit_neurons` 读取 `ToolCircuitNeurons` 阶段 TCN-1 融合后的 `TCN_CTD` ProbePrefill 特征；它不重新抽模型激活，不重跑标签数据，后续 PP-2 的二分类 probe 训练路径保持不变。
@@ -101,6 +103,17 @@ python ToolKnowledgeNeurons/tkn_discover_shared_neurons.py --model-alias qwen3-4
 ```
 
 TKN-5 打印每个 subset 的 `TKN_CTD` 数量、score mean/max、是否使用 down_proj norm，并写出 density、全局 top score、逐层 mean score、逐层 top 1% score 四类热力图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TKN-5 命令末尾追加 `--clean`。
+
+## TKNActivationGain / TKN 激活增益前置阶段
+
+该方法复用 TKN-4/TKN-5 已有产物，只使用 `train` split 统计每个 TKN 神经元的方向、阈值和尺度，`test` split 只用冻结好的统计量构建测试特征。它不是把全部激活统一乘常数；统一缩放会被 PP-2 的 `StandardScaler` 抵消。默认 `dual_evidence` 会为每个 TKN 神经元写出 `signed_z`、`positive_gain`、`negative_gain` 三类证据列，让线性 probe 自己组合强工具证据和强直接回答证据。TKAG-1 会直接写出 PP-1 等价的 `train_features.pt/test_features.pt`，所以本方法不再单独运行 `pp_build_probe_features.py`。
+
+TKAG-1 单卡指令：
+```text
+python ToolKnowledgeNeurons/tkn_activation_gain/tkag_build_probe_features.py --model-alias qwen3-4b-instruct --subset all --activations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/activations --tkn-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --output-neurons-dir ../cross_task_tool_neurons_data/tkn_activation_gain/neurons --output-probe-root ../cross_task_tool_neurons_data/probe_prefill/tkn_activation_gain --visualizations-dir ../cross_task_tool_neurons_data/tkn_activation_gain/visualizations --keep-ratio 1.0 --gain-lambda 1.0 --evidence-power 2.0 --feature-mode dual_evidence --threshold-mode midpoint --min-neurons-per-layer 1 --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026 --device cuda:0
+```
+
+TKAG-1 打印每个 subset 的源 TKN 数量、最终 feature dim、`lambda`、feature mode 和输出路径；写出 `TKAG_CTD_neurons.jsonl`、逐层统计 CSV、三张可视化图，以及 `probe_prefill/tkn_activation_gain/probe_features/` 下的训练/测试特征。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TKAG-1 命令末尾追加 `--clean`，清理范围只限 `tkn_activation_gain` 本方案输出目录。
 
 ## ToolKnowledgePathways / TKN 路径增强前置阶段
 
@@ -252,6 +265,8 @@ ToolKnowledgeNeurons / TKN_CTD 单卡指令：
 python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026
 ```
 
+TKNActivationGain / TKN_AG：本方法的 PP-1 等价特征已由 TKAG-1 直接生成，跳过本阶段，不运行 `pp_build_probe_features.py`。
+
 ToolKnowledgePathways / TKP_TKN_CTD 单卡指令：
 
 ```text
@@ -338,6 +353,12 @@ ToolKnowledgeNeurons / TKN_CTD 单卡指令：
 
 ```text
 python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --reg 10000 --max-iter 2000 --threshold 0.5
+```
+
+TKNActivationGain / TKN_AG 单卡指令：
+
+```text
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tkn_activation_gain --subset all --reg 10000 --max-iter 2000 --threshold 0.5
 ```
 
 ToolKnowledgePathways / TKP_TKN_CTD 单卡指令：
