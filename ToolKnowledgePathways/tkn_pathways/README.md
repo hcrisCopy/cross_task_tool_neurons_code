@@ -46,6 +46,12 @@ TKP-1：构建 TKN 路径增强神经元，`single_hop` 和 `multi_hop` 会分�
 python ToolKnowledgePathways/tkn_pathways/tkp_tkn_discover_pathways.py --model-alias qwen3-4b-instruct --subset all --activations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/activations --tkn-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --output-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --gpus 0 --device cuda:0 --candidate-per-direction-per-layer 256 --anchor-per-direction-per-layer 96 --final-per-direction-per-layer 192 --max-layer-gap 4 --edge-top-k 4 --activation-quantile 0.70 --min-target-phi 0.02 --generic-penalty 0.5 --min-edge-score -0.01 --causal-mode sampled_mask --causal-sources-per-layer-direction 3 --causal-targets-per-source 4 --causal-samples-per-task 12 --causal-batch-size 2 --min-causal-effect 0.0 --torch-dtype bfloat16 --device-map auto
 ```
 
+TKP-2：按旧 `ToolKnowledgePathways/tkp_visualize_pathways.py` 的查看习惯生成只读可视化：
+
+```text
+python ToolKnowledgePathways/tkn_pathways/tkp_tkn_visualize_pathways.py --model-alias qwen3-4b-instruct --subset all --output-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons --tkn-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations --top-score-ratio 0.01 --edge-plot-limit 30000 --clean
+```
+
 PP-1：构建 ProbePrefill 特征：
 
 ```text
@@ -66,6 +72,9 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-me
 ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons/<model_alias>/shared_by_subset/<subset>/TKP_TKN_CTD_neurons.jsonl
 ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons/<model_alias>/shared_by_subset/<subset>/TKP_TKN_path_edges.jsonl
 ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons/<model_alias>/shared_by_subset/<subset>/summary.json
-../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations/<model_alias>/shared_by_subset/<subset>/*.png
+../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations/<model_alias>/<subset>/pathway_node_counts_by_layer.png
+../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations/<model_alias>/<subset>/pathway_scores_by_layer.png
+../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations/<model_alias>/<subset>/pathway_tkn_scores_heatmap.png
+../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations/<model_alias>/<subset>/causal_pathway_edges.png
 ../cross_task_tool_neurons_data/probe_prefill/tool_knowledge_pathways/
 ```

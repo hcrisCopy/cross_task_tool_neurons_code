@@ -124,7 +124,12 @@ TKP-1 单卡指令：
 python ToolKnowledgePathways/tkn_pathways/tkp_tkn_discover_pathways.py --model-alias qwen3-4b-instruct --subset all --activations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/activations --tkn-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --output-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations --dataset-dir ../cross_task_tool_neurons_data/datasets/modified_when2tool --when2tool-repo third_party/when2tool --gpus 0 --device cuda:0 --candidate-per-direction-per-layer 256 --anchor-per-direction-per-layer 96 --final-per-direction-per-layer 192 --max-layer-gap 4 --edge-top-k 4 --activation-quantile 0.70 --min-target-phi 0.02 --generic-penalty 0.5 --min-edge-score -0.01 --causal-mode sampled_mask --causal-sources-per-layer-direction 3 --causal-targets-per-source 4 --causal-samples-per-task 12 --causal-batch-size 2 --min-causal-effect 0.0 --torch-dtype bfloat16 --device-map auto
 ```
 
-TKP-1 打印每个 subset 的候选规模、coactivation 边数、causal shortlist 数量、最终 `TKP_TKN_CTD` 数量、层覆盖和输出路径；同时写出逐层节点数、路径边、layer-gap 边分数、候选保留率可视化。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TKP-1 命令末尾追加 `--clean`，清理范围只限 `tool_knowledge_pathways` 本方案输出目录。
+TKP-2 可视化单卡指令：
+```text
+python ToolKnowledgePathways/tkn_pathways/tkp_tkn_visualize_pathways.py --model-alias qwen3-4b-instruct --subset all --output-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/neurons --tkn-neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_pathways/visualizations --top-score-ratio 0.01 --edge-plot-limit 30000 --clean
+```
+
+TKP-1 打印每个 subset 的候选规模、coactivation 边数、causal shortlist 数量、最终 `TKP_TKN_CTD` 数量、层覆盖和输出路径；TKP-2 按旧 `ToolKnowledgePathways/tkp_visualize_pathways.py` 的查看习惯写出逐层节点数、逐层 pathway score、TKN top 1% 前后对比热力图和因果边图。manifest 一致时会提前跳过；需要清理错误旧产物时，在原 TKP-1 命令末尾追加 `--clean`，TKP-2 用上面命令里的 `--clean` 只清理本方案可视化目录。
 
 ## ToolRoutingNeurons 前置阶段
 
