@@ -49,6 +49,7 @@ PROBE_METHOD_PRECISE_SHIELD_DEEPFAKE = "precise_shield_deepfake"
 PROBE_METHOD_TOOL_DECISION_ANCHORS = "tool_decision_anchors"
 PROBE_METHOD_RESIDUAL_DECISION_ANCHORS = "residual_decision_anchors"
 PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS = "tool_knowledge_neurons"
+PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS = "tool_knowledge_pathways"
 PROBE_METHOD_TOOL_ROUTING_NEURONS = "tool_routing_neurons"
 PROBE_METHOD_TOOL_CIRCUIT_NEURONS = "tool_circuit_neurons"
 SUPPORTED_PROBE_METHODS = (
@@ -63,6 +64,7 @@ SUPPORTED_PROBE_METHODS = (
     PROBE_METHOD_TOOL_DECISION_ANCHORS,
     PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
     PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+    PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
     PROBE_METHOD_TOOL_ROUTING_NEURONS,
     PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
 )
@@ -213,6 +215,23 @@ PROBE_METHOD_CONFIGS = {
         "train_probe_method": "TKN_CTD logistic probe",
         "probe_prefill_method": "ToolKnowledgeNeurons-TKN_CTD-Probe&Prefill",
     },
+    PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS: {
+        "namespace": "tool_knowledge_pathways",
+        "label": "ToolKnowledgePathways",
+        "shared_label": "TKP_TKN_CTD",
+        "single_label": "TKN_TDN",
+        "shared_filename": "TKP_TKN_CTD_neurons.jsonl",
+        "single_filename": "TKN_TDN_neurons.jsonl",
+        "feature_set": "TKP_TKN_CTD",
+        "feature_description": "ToolKnowledgePathways directional skip-layer TKN pathway neurons",
+        "feature_definition": (
+            "TKP-1 last-input-token FFN intermediate h before down_proj restricted to "
+            "pathway-enhanced TKN neurons: per-layer tool_high/direct_high TKN anchors plus "
+            "directional skip-layer coactivation nodes with sampled masking validation"
+        ),
+        "train_probe_method": "TKP_TKN_CTD logistic probe",
+        "probe_prefill_method": "ToolKnowledgePathways-TKP_TKN_CTD-Probe&Prefill",
+    },
     PROBE_METHOD_TOOL_ROUTING_NEURONS: {
         "namespace": "tool_routing_neurons",
         "label": "ToolRoutingNeurons",
@@ -270,6 +289,7 @@ __all__ = [
     "PROBE_METHOD_TOOL_CIRCUIT_NEURONS",
     "PROBE_METHOD_TOOL_DECISION_ANCHORS",
     "PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS",
+    "PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS",
     "PROBE_METHOD_TOOL_ROUTING_NEURONS",
     "SUPPORTED_PROBE_METHODS",
     "classification_metrics",
@@ -413,6 +433,12 @@ def normalize_probe_method(value: str | None) -> str:
         "tool_knowledge_neuron": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
         "tool_knowledge_neurons": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
         "tkn_ctd": PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+        "tkp": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
+        "toolknowledgepathways": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
+        "tool_knowledge_pathway": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
+        "tool_knowledge_pathways": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
+        "tkp_tkn": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
+        "tkp_tkn_ctd": PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
         "trn": PROBE_METHOD_TOOL_ROUTING_NEURONS,
         "toolroutingneurons": PROBE_METHOD_TOOL_ROUTING_NEURONS,
         "tool_routing_neuron": PROBE_METHOD_TOOL_ROUTING_NEURONS,
@@ -490,6 +516,8 @@ def default_method_activations_dir(probe_method: str | None) -> Path:
         return data_root() / "residual_decision_anchors" / "activations"
     if method == PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS:
         return data_root() / "tool_knowledge_neurons" / "activations"
+    if method == PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS:
+        return data_root() / "tool_knowledge_neurons" / "activations"
     if method == PROBE_METHOD_TOOL_ROUTING_NEURONS:
         return data_root() / "tool_routing_neurons" / "activations"
     if method == PROBE_METHOD_TOOL_CIRCUIT_NEURONS:
@@ -521,6 +549,8 @@ def default_method_neurons_dir(probe_method: str | None) -> Path:
         return data_root() / "residual_decision_anchors" / "neurons"
     if method == PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS:
         return data_root() / "tool_knowledge_neurons" / "neurons"
+    if method == PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS:
+        return data_root() / "tool_knowledge_pathways" / "neurons"
     if method == PROBE_METHOD_TOOL_ROUTING_NEURONS:
         return data_root() / "tool_routing_neurons" / "neurons"
     if method == PROBE_METHOD_TOOL_CIRCUIT_NEURONS:
@@ -705,6 +735,7 @@ def load_shared_neuron_rows(
             PROBE_METHOD_TOOL_DECISION_ANCHORS,
             PROBE_METHOD_RESIDUAL_DECISION_ANCHORS,
             PROBE_METHOD_TOOL_KNOWLEDGE_NEURONS,
+            PROBE_METHOD_TOOL_KNOWLEDGE_PATHWAYS,
             PROBE_METHOD_TOOL_ROUTING_NEURONS,
             PROBE_METHOD_TOOL_CIRCUIT_NEURONS,
         }:
