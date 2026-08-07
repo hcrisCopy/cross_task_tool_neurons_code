@@ -44,6 +44,23 @@ python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-me
 
 TKN-5 会写出 `density_heatmap`、全局 top score heatmap、逐层 mean score heatmap，以及与 SafetyKernel/PreciseShield 对齐的逐层 top 1% 分数热力图 `tkn_ctd_layer_top1pct_score_heatmap_<subset>.png`。
 
+## 去掉下游影响力的变体（`--no-down-norm`）
+
+默认 TKN 分数把配对差分乘上 `down_proj` 列范数加权（下游影响力，即公式里的 `normalized_down_proj_col_norm`）。只想看纯激活配对差分时，给 TKN-5 追加 `--no-down-norm`，此时 `z_c = zscore(signed_shift)`、`weighted_shift = paired_shift`。
+
+运行顺序：TKN-4 命令与上面完全一致（激活产物已含 `down_weight_norms`，无需重抽）；TKN-5、PP-1、PP-2 如下，神经元与 probe 产物写到独立目录避免覆盖正式版：
+
+```text
+python ToolKnowledgeNeurons/tkn_discover_shared_neurons.py --model-alias qwen3-4b-instruct --activations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/activations --neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons_nodownnorm --visualizations-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/visualizations_nodownnorm --subset all --selection top_ratio --top-ratio 0.10 --min-neurons-per-layer 64 --min-shared-score 0.0 --min-pairs 2 --max-pairs 0 --epsilon 1.0e-4 --floor-ratio 0.05 --heatmap-top-n 300 --device cuda:0 --no-down-norm
+
+python ProbePrefill/pp_build_probe_features.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --max-train-samples 0 --max-test-samples 0 --sample-strategy first --require-per-type-labels --seed 2026 --neurons-dir ../cross_task_tool_neurons_data/tool_knowledge_neurons/neurons_nodownnorm --output-root ../cross_task_tool_neurons_data/probe_prefill_tkn_nodownnorm
+
+python ProbePrefill/pp_train_probe.py --model-alias qwen3-4b-instruct --probe-method tool_knowledge_neurons --subset all --reg 10000 --max-iter 2000 --threshold 0.5 --output-root ../cross_task_tool_neurons_data/probe_prefill_tkn_nodownnorm
+```
+
+注意：`--output-root` 会再按 `probe_method` 拼一层 `tool_knowledge_neurons/` 子目录，两条命令保持一致即可对上；神经元与 probe 的 manifest 会记录 `use_down_norm`，产物互不污染。
+
+
 可选的 DNA 风格临时线性 probe 重排命令：
 
 ```text
